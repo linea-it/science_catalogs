@@ -1,0 +1,81 @@
+[build-system]
+requires = [
+    "setuptools>=82.0.1",
+    "setuptools_scm>=9.2.2",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "science-catalogs"
+dynamic = ["version"]
+description = "Reusable toolkit for science-ready catalog preparation with Dask, LSDB, and HATS."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "LIneA IT" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Astronomy",
+]
+dependencies = [
+    "numpy",
+    "pandas",
+    "pyyaml",
+    "dask==2025.3.0",
+    "distributed==2025.3.0",
+    "dask-jobqueue==0.9.0",
+    "astropy",
+    "dustmaps",
+    "tables-io==1.0.0",
+    "bokeh==3.4.*",
+    "jinja2==3.1.*",
+    "h5py",
+    "cdshealpix==0.7.2",
+    "lsdb==0.7.3",
+    "hats==0.7.3",
+    "hats-import==0.7.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "black",
+    "pre-commit",
+    "pytest",
+    "pytest-cov",
+    "ruff",
+    "sphinx",
+    "sphinx-autoapi",
+    "sphinx-copybutton",
+    "sphinx-rtd-theme>=3.1.0",
+    "nbsphinx",
+]
+
+[project.urls]
+Repository = "https://github.com/linea-it/science_catalogs"
+Issues = "https://github.com/linea-it/science_catalogs/issues"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools_scm]
+write_to = "src/science_catalogs/_version.py"
+
+[tool.black]
+line-length = 110
+
+[tool.ruff]
+line-length = 110
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
