@@ -6,7 +6,7 @@ requires = [
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "science-catalogs"
+name = "science_catalogs"
 dynamic = ["version"]
 description = "Reusable toolkit for science-ready catalog preparation with Dask, LSDB, and HATS."
 readme = "README.md"
@@ -17,7 +17,8 @@ authors = [
     { name = "LIneA IT" },
 ]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "Operating System :: OS Independent",
     "Programming Language :: Python",
@@ -46,7 +47,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "black",
+    "asv[virtualenv]==0.6.5",
+    "jupyter",
     "pre-commit",
     "pytest",
     "pytest-cov",
@@ -59,7 +61,7 @@ dev = [
 ]
 
 [project.urls]
-Repository = "https://github.com/linea-it/science_catalogs"
+"Source Code" = "https://github.com/linea-it/science_catalogs"
 Issues = "https://github.com/linea-it/science_catalogs/issues"
 
 [tool.setuptools]
@@ -71,11 +73,48 @@ where = ["src"]
 [tool.setuptools_scm]
 write_to = "src/science_catalogs/_version.py"
 
-[tool.black]
-line-length = 110
+[tool.pytest.ini_options]
+testpaths = [
+    "tests",
+    "src",
+    "docs",
+]
+addopts = "--doctest-modules --doctest-glob=*.rst"
 
 [tool.ruff]
 line-length = 110
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
+[tool.ruff.lint]
+select = [
+    "E",
+    "W",
+    "F",
+    "N",
+    "UP",
+    "B",
+    "SIM",
+    "I",
+    "D101",
+    "D102",
+    "D103",
+    "D106",
+    "D206",
+    "D207",
+    "D208",
+    "D300",
+    "D417",
+    "D419",
+    "NPY201",
+]
+ignore = [
+    "UP006",
+    "UP007",
+    "SIM114",
+    "B028",
+    "SIM117",
+    "UP015",
+    "UP028",
+]
+
+[tool.coverage.run]
+omit = ["src/science_catalogs/_version.py"]
