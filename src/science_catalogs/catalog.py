@@ -35,7 +35,7 @@ class PreparedCatalog:
 
 
 @dataclass(slots=True)
-class PipelineResult:
+class CatalogResult:
     """Materialized result returned by the convenience wrapper."""
 
     output_mode: str
@@ -45,8 +45,8 @@ class PipelineResult:
     written_paths: tuple[str, ...] = ()
 
 
-def load_pipeline_config(config_path: str) -> dict[str, Any]:
-    """Load a pipeline YAML config from disk."""
+def load_catalog_config(config_path: str) -> dict[str, Any]:
+    """Load a catalog-processing YAML config from disk."""
     import yaml
 
     with open(config_path, "r", encoding="utf-8") as _file:
@@ -54,8 +54,8 @@ def load_pipeline_config(config_path: str) -> dict[str, Any]:
 
 
 def prepare_catalog(config_path: str, config: dict[str, Any] | None = None) -> PreparedCatalog:
-    """Build the lazy processed catalog without creating pipeline artifacts."""
-    cfg = config if config is not None else load_pipeline_config(config_path)
+    """Build the lazy processed catalog without creating workflow-specific artifacts."""
+    cfg = config if config is not None else load_catalog_config(config_path)
 
     inputs = cfg.get("input", {})
     dust = cfg.get("dust", {})
@@ -172,21 +172,21 @@ def _resolve_output_dir(
     raise ValueError("output_dir is required for output_mode='disk' when cwd/base_path are not available")
 
 
-def run_pipeline(
+def build_catalog(
     config_path: str,
     cwd: str | None = None,
     *,
     output_mode: str = "disk",
     output_dir: str | None = None,
-) -> PipelineResult:
+) -> CatalogResult:
     """
-    Convenience wrapper around the package core.
+    Execute the full catalog-building flow from a configuration file.
 
     `output_mode="memory"` returns the processed catalog as a pandas dataframe.
     `output_mode="disk"` writes the processed catalog to `output_dir` and returns written paths.
     `output_mode="lsdb"` writes HATS output and reopens it as an `lsdb.Catalog`.
     """
-    cfg = load_pipeline_config(config_path)
+    cfg = load_catalog_config(config_path)
     cluster = get_executor(cfg.get("cluster", {}))
     client = Client(cluster)
     cluster_ref = client.cluster
@@ -201,12 +201,12 @@ def run_pipeline(
 
         if output_mode == "memory":
             data = materialize_catalog(prepared)
-            return PipelineResult(output_mode="memory", suffix=prepared.suffix, data=data)
+            return CatalogResult(output_mode="memory", suffix=prepared.suffix, data=data)
 
         if output_mode == "disk":
             resolved_output_dir = _resolve_output_dir(prepared, cwd, output_dir)
             written_paths = write_catalog(prepared, resolved_output_dir, client=client)
-            return PipelineResult(
+            return CatalogResult(
                 output_mode="disk",
                 suffix=prepared.suffix,
                 written_paths=tuple(written_paths),
@@ -215,7 +215,7 @@ def run_pipeline(
         if output_mode == "lsdb":
             resolved_output_dir = _resolve_output_dir(prepared, cwd, output_dir)
             catalog = materialize_lsdb_catalog(prepared, resolved_output_dir, client=client)
-            return PipelineResult(
+            return CatalogResult(
                 output_mode="lsdb",
                 suffix=prepared.suffix,
                 catalog=catalog,
@@ -229,12 +229,12 @@ def run_pipeline(
 
 __all__ = [
     "PreparedCatalog",
-    "PipelineResult",
-    "load_pipeline_config",
+    "CatalogResult",
+    "load_catalog_config",
     "prepare_catalog",
     "materialize_catalog",
     "materialize_lsdb_catalog",
     "open_lsdb_catalog",
     "write_catalog",
-    "run_pipeline",
+    "build_catalog",
 ]

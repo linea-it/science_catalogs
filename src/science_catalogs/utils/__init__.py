@@ -1,1 +1,1 @@
-"""Internal utilities for the science catalogs core package."""
+"""Internal utilities for the science catalogs package."""

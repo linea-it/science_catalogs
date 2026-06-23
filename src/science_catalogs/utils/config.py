@@ -1,4 +1,4 @@
-"""Small config helpers for the Science Catalogs pipeline."""
+"""Small config helpers for Science Catalogs configuration."""
 
 from typing import Any
 

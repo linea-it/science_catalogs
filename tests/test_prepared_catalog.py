@@ -1,6 +1,6 @@
 """Tests for final materialization helpers."""
 
-from science_catalogs.pipeline import (
+from science_catalogs.catalog import (
     PreparedCatalog,
     materialize_catalog,
     materialize_lsdb_catalog,
@@ -79,7 +79,7 @@ def test_materialize_lsdb_catalog_uses_hats_output(monkeypatch):
         calls["client"] = client
         return (f"{output_dir}/demo_collection",)
 
-    monkeypatch.setattr("science_catalogs.pipeline.write_catalog", fake_write_catalog)
+    monkeypatch.setattr("science_catalogs.catalog.write_catalog", fake_write_catalog)
 
     prepared = PreparedCatalog(
         config={},
