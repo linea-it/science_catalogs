@@ -9,12 +9,19 @@ processing stack:
 - row filtering
 - output materialization to memory, partitioned files, or HATS catalogs
 
-Report generation, pipeline orchestration, and product declaration stay outside
+Report generation, workflow orchestration, and product declaration stay outside
 this repository.
 
-The Python package is exposed as `science_catalogs`.
+The package is published on PyPI as `science-catalogs` and imported in Python as
+`science_catalogs`.
 
 ## Installation
+
+```bash
+pip install science-catalogs
+```
+
+For local development:
 
 ```bash
 pip install -e '.[dev]'
@@ -24,6 +31,7 @@ pip install -e '.[dev]'
 
 ```python
 from science_catalogs import (
+    build_catalog,
     materialize_catalog,
     materialize_lsdb_catalog,
     open_lsdb_catalog,
@@ -32,9 +40,22 @@ from science_catalogs import (
 )
 ```
 
+## Beta API
+
+The beta public API is:
+
+- `prepare_catalog`
+- `materialize_catalog`
+- `write_catalog`
+- `materialize_lsdb_catalog`
+- `open_lsdb_catalog`
+- `build_catalog`
+
+Legacy names based on `pipeline` are not part of the beta API.
+
 ## Usage
 
-Prepare a catalog from a pipeline-style YAML configuration:
+Prepare a catalog from a catalog-processing YAML configuration:
 
 ```python
 from science_catalogs import prepare_catalog
@@ -67,6 +88,15 @@ from science_catalogs import materialize_lsdb_catalog
 catalog = materialize_lsdb_catalog(prepared, "./output")
 ```
 
+Execute the full flow from configuration in one call:
+
+```python
+from science_catalogs import build_catalog
+
+result = build_catalog("configs/catalog.yml", output_mode="memory")
+frame = result.data
+```
+
 If you already have a HATS catalog on disk, you can open it directly:
 
 ```python
@@ -78,6 +108,6 @@ catalog = open_lsdb_catalog("./output/my_catalog")
 ## Scope
 
 This package is intentionally limited to reusable catalog preparation logic.
-Pipeline-only concerns such as CLI execution, report generation, and workflow
-product registration should live in the pipeline repository that consumes this
-library.
+Application-level concerns such as CLI execution, report generation, and
+workflow product registration should live in the downstream workflow repository
+that consumes this library.

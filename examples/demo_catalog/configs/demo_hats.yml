@@ -1,0 +1,61 @@
+input:
+  catalog_folder: examples/demo_catalog/data/input
+  catalog_pattern: "*.parquet"
+  which_release: LSST_DP02
+  user_selected_cols:
+    - object_id
+    - ra
+    - dec
+    - flux_g
+    - fluxerr_g
+    - flux_r
+    - fluxerr_r
+    - is_primary
+    - tile
+  is_id_in_index: false
+  input_col_type: flux
+  input_col_model: cmodel
+  compute_magnitude: true
+  compute_dereddening: false
+  keep_input_columns_when_computing_mag_or_dered: false
+  col_pattern: flux_BAND
+  err_pattern: fluxerr_BAND
+  selected_bands: [g, r]
+  ra_col: ra
+  dec_col: dec
+  band_case: lower_case
+  filter:
+    enabled: true
+    column: is_primary
+    value: true
+    drop_column_after_filter: true
+  initial_cut:
+    enabled: true
+    column: flux_g
+    column_type: flux
+    flux_value: 80.0
+
+output:
+  save_as: hats
+  hats_source_save_as: parquet
+  hats_artifact_name: demo_hats_catalog
+  target_rows_per_part: 2
+  order_by: object_id
+  col_final_pattern: mag_BAND
+  err_final_pattern: magerr_BAND
+  band_case: lower_case
+  mag_offset: 31.4
+  col_for_filename: tile
+
+cluster:
+  executor: local
+  local:
+    n_workers: 1
+    threads_per_worker: 2
+    processes: false
+
+dust:
+  path_to_dustmaps: null
+
+collection:
+  margin_threshold: 10.0
