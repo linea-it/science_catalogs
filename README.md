@@ -27,6 +27,13 @@ For local development:
 pip install -e '.[dev]'
 ```
 
+Or, if you prefer a requirements file for a full developer environment including
+build and PyPI publication tools:
+
+```bash
+pip install -r requirements-dev.txt
+```
+
 ## Main API
 
 ```python
