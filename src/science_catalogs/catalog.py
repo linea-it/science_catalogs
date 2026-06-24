@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import gc
 import glob
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
-from dask import delayed
 from dask import dataframe as dd
+from dask import delayed
 from dask.distributed import Client, wait
 
 from science_catalogs.executor import get_executor
@@ -32,17 +31,6 @@ class PreparedCatalog:
     ra_col: str | None
     dec_col: str | None
     input_files: list[str] = field(default_factory=list)
-
-
-@dataclass(slots=True)
-class CatalogResult:
-    """Materialized result returned by the convenience wrapper."""
-
-    output_mode: str
-    suffix: str
-    data: pd.DataFrame | None = None
-    catalog: Any | None = None
-    written_paths: tuple[str, ...] = ()
 
 
 def load_catalog_config(config_path: str) -> dict[str, Any]:
@@ -104,21 +92,63 @@ def prepare_catalog(config_path: str, config: dict[str, Any] | None = None) -> P
     )
 
 
-def materialize_catalog(prepared: PreparedCatalog) -> pd.DataFrame:
-    """Compute the processed catalog into memory as a pandas dataframe."""
-    return prepared.ddf.compute()
+def _resolve_output_cfg(output_cfg: dict[str, Any], output_format: str | None) -> dict[str, Any]:
+    resolved_cfg = dict(output_cfg)
+    if output_format is None:
+        return resolved_cfg
+    if output_format not in {"parquet", "hats"}:
+        raise ValueError("output_format must be 'parquet' or 'hats'")
+    resolved_cfg["save_as"] = output_format
+    return resolved_cfg
 
 
-def open_lsdb_catalog(catalog_path: str | Path, **kwargs):
+def _normalize_written_path(written_paths: tuple[str, ...]) -> str | tuple[str, ...]:
+    if len(written_paths) == 1:
+        return written_paths[0]
+    return written_paths
+
+
+def _persist_prepared(prepared: PreparedCatalog, client=None) -> PreparedCatalog:
+    if client is None or not hasattr(client, "persist"):
+        return prepared
+
+    persisted_ddf = client.persist(prepared.ddf)
+    wait(persisted_ddf)
+    return replace(prepared, ddf=persisted_ddf)
+
+
+def materialize_catalog(
+    prepared: PreparedCatalog,
+    output_dir: str | None = None,
+    client=None,
+    *,
+    output_format: str | None = None,
+) -> dict[str, Any]:
+    """Compute the catalog in memory and also persist the written artifact paths."""
+    resolved_output_dir = _resolve_output_dir(prepared, output_dir)
+    prepared_for_materialization = _persist_prepared(prepared, client=client)
+    data = prepared_for_materialization.ddf.compute()
+    written_paths = write_catalog(
+        prepared_for_materialization,
+        resolved_output_dir,
+        client=client,
+        output_format=output_format,
+    )
+    return {"data": data, "path": _normalize_written_path(tuple(written_paths))}
+
+
+def open_lsdb_catalog(catalog_path: str | Path, client=None, **kwargs):
     """Open an LSDB catalog from a HATS path on disk."""
     import lsdb
 
+    if client is not None:
+        kwargs["client"] = client
     return lsdb.open_catalog(str(catalog_path), **kwargs)
 
 
 def materialize_lsdb_catalog(
     prepared: PreparedCatalog,
-    output_dir: str,
+    output_dir: str | None = None,
     client=None,
     **kwargs,
 ):
@@ -128,23 +158,37 @@ def materialize_lsdb_catalog(
     This avoids the in-memory `lsdb.from_dataframe(...)` path and relies on
     LSDB's HATS loader instead.
     """
-    if prepared.output_cfg.get("save_as", "parquet") != "hats":
-        raise ValueError("materialize_lsdb_catalog requires output.save_as == 'hats'")
-
-    written_paths = write_catalog(prepared, output_dir, client=client)
+    resolved_output_dir = _resolve_output_dir(prepared, output_dir)
+    prepared_for_materialization = _persist_prepared(prepared, client=client)
+    written_paths = write_catalog(
+        prepared_for_materialization,
+        resolved_output_dir,
+        client=client,
+        output_format="hats",
+    )
     if not written_paths:
         raise ValueError("No HATS catalog path was produced")
-    return open_lsdb_catalog(written_paths[0], **kwargs)
+    return {
+        "data": open_lsdb_catalog(written_paths[0], client=client, **kwargs),
+        "path": written_paths[0],
+    }
 
 
-def write_catalog(prepared: PreparedCatalog, output_dir: str, client=None) -> tuple[str, ...]:
+def write_catalog(
+    prepared: PreparedCatalog,
+    output_dir: str,
+    client=None,
+    *,
+    output_format: str | None = None,
+) -> tuple[str, ...]:
     """Write the processed catalog partitions or HATS output to disk."""
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    if prepared.output_cfg.get("save_as", "parquet") == "hats":
+    output_cfg = _resolve_output_cfg(prepared.output_cfg, output_format)
+    if output_cfg.get("save_as", "parquet") == "hats":
         return write_hats_catalog(
             prepared.ddf,
-            prepared.output_cfg,
+            output_cfg,
             prepared.config.get("collection", {}),
             str(output_path),
             prepared.suffix,
@@ -152,39 +196,35 @@ def write_catalog(prepared: PreparedCatalog, output_dir: str, client=None) -> tu
             prepared.dec_col,
             client=client,
         )
-    return write_partitions(prepared.ddf, prepared.output_cfg, str(output_path), prepared.suffix)
+    return write_partitions(prepared.ddf, output_cfg, str(output_path), prepared.suffix)
 
 
 def _resolve_output_dir(
     prepared: PreparedCatalog,
-    cwd: str | None,
     output_dir: str | None,
 ) -> str:
     if output_dir is not None:
         return str(output_dir)
-    if cwd is not None:
-        return str(Path(cwd) / "data")
 
     base_path = prepared.output_cfg.get("base_path")
     if base_path:
         return str(base_path)
 
-    raise ValueError("output_dir is required for output_mode='disk' when cwd/base_path are not available")
+    return str(Path.cwd() / "data")
 
 
 def build_catalog(
     config_path: str,
-    cwd: str | None = None,
     *,
-    output_mode: str = "disk",
     output_dir: str | None = None,
-) -> CatalogResult:
+    output_format: str | None = None,
+) -> str | tuple[str, ...]:
     """
-    Execute the full catalog-building flow from a configuration file.
+    Execute the full catalog-building flow and persist the result to disk.
 
-    `output_mode="memory"` returns the processed catalog as a pandas dataframe.
-    `output_mode="disk"` writes the processed catalog to `output_dir` and returns written paths.
-    `output_mode="lsdb"` writes HATS output and reopens it as an `lsdb.Catalog`.
+    When `output_dir` is omitted, the default output directory is `./data`.
+    The returned value is the written parquet partition paths, or the HATS
+    artifact directory when `output_format="hats"`.
     """
     cfg = load_catalog_config(config_path)
     cluster = get_executor(cfg.get("cluster", {}))
@@ -198,30 +238,14 @@ def build_catalog(
         client.run(lambda: gc.collect())
 
         prepared = prepare_catalog(config_path, config=cfg)
-
-        if output_mode == "memory":
-            data = materialize_catalog(prepared)
-            return CatalogResult(output_mode="memory", suffix=prepared.suffix, data=data)
-
-        if output_mode == "disk":
-            resolved_output_dir = _resolve_output_dir(prepared, cwd, output_dir)
-            written_paths = write_catalog(prepared, resolved_output_dir, client=client)
-            return CatalogResult(
-                output_mode="disk",
-                suffix=prepared.suffix,
-                written_paths=tuple(written_paths),
-            )
-
-        if output_mode == "lsdb":
-            resolved_output_dir = _resolve_output_dir(prepared, cwd, output_dir)
-            catalog = materialize_lsdb_catalog(prepared, resolved_output_dir, client=client)
-            return CatalogResult(
-                output_mode="lsdb",
-                suffix=prepared.suffix,
-                catalog=catalog,
-            )
-
-        raise ValueError("output_mode must be 'memory', 'disk', or 'lsdb'")
+        resolved_output_dir = _resolve_output_dir(prepared, output_dir)
+        written_paths = write_catalog(
+            prepared,
+            resolved_output_dir,
+            client=client,
+            output_format=output_format,
+        )
+        return _normalize_written_path(tuple(written_paths))
     finally:
         client.close()
         cluster.close()
@@ -229,7 +253,6 @@ def build_catalog(
 
 __all__ = [
     "PreparedCatalog",
-    "CatalogResult",
     "load_catalog_config",
     "prepare_catalog",
     "materialize_catalog",

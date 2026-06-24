@@ -1,44 +1,40 @@
 """Tests for the command-line interface."""
 
 from science_catalogs import cli
-from science_catalogs.catalog import CatalogResult
 
 
-def test_cli_memory_mode(monkeypatch, capsys):
+def test_cli_parquet_output(monkeypatch, capsys):
+    """Report the number of written parquet partitions."""
     monkeypatch.setattr(
         cli,
         "build_catalog",
-        lambda config_path, output_mode, output_dir: CatalogResult(
-            output_mode="memory",
-            suffix="_demo",
-            data=[1, 2, 3],
+        lambda config_path, output_dir, output_format=None: (
+            f"{output_dir}/part0.parquet",
+            f"{output_dir}/part1.parquet",
         ),
     )
     monkeypatch.setattr(
         "sys.argv",
-        ["science-catalogs", "config.yml", "--output-mode", "memory"],
+        ["science-catalogs", "config.yml", "/tmp/out", "--output-format", "parquet"],
     )
 
     cli.main()
     out = capsys.readouterr().out
-    assert "Computed dataframe with 3 rows" in out
+    assert "Wrote 2 partition files" in out
 
 
-def test_cli_lsdb_mode(monkeypatch, capsys, tmp_path):
+def test_cli_hats_output(monkeypatch, capsys, tmp_path):
+    """Report the final HATS artifact location."""
     monkeypatch.setattr(
         cli,
         "build_catalog",
-        lambda config_path, output_mode, output_dir: CatalogResult(
-            output_mode="lsdb",
-            suffix="_demo",
-            catalog="fake_catalog",
-        ),
+        lambda config_path, output_dir, output_format=None: f"{output_dir}/demo_collection",
     )
     monkeypatch.setattr(
         "sys.argv",
-        ["science-catalogs", "config.yml", str(tmp_path), "--output-mode", "lsdb"],
+        ["science-catalogs", "config.yml", str(tmp_path), "--output-format", "hats"],
     )
 
     cli.main()
     out = capsys.readouterr().out
-    assert "Opened LSDB catalog" in out
+    assert f"Wrote artifact to {tmp_path}/demo_collection" in out

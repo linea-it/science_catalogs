@@ -7,7 +7,7 @@ except ImportError:  # pragma: no cover
 
 
 def build_catalog(*args, **kwargs):
-    """Lazily execute the full catalog-building flow."""
+    """Lazily execute the full catalog-building flow to disk."""
     from science_catalogs.catalog import build_catalog as _build_catalog
 
     return _build_catalog(*args, **kwargs)
@@ -21,14 +21,14 @@ def prepare_catalog(*args, **kwargs):
 
 
 def materialize_catalog(*args, **kwargs):
-    """Lazily compute the processed catalog into memory."""
+    """Lazily compute the processed catalog and return data plus written paths."""
     from science_catalogs.catalog import materialize_catalog as _materialize_catalog
 
     return _materialize_catalog(*args, **kwargs)
 
 
 def materialize_lsdb_catalog(*args, **kwargs):
-    """Lazily open the final processed catalog as an LSDB Catalog."""
+    """Lazily write HATS output and return an LSDB Catalog plus its path."""
     from science_catalogs.catalog import (
         materialize_lsdb_catalog as _materialize_lsdb_catalog,
     )

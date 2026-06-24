@@ -1,7 +1,7 @@
 """File readers and format detection."""
 
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 import pandas as pd
 from astropy.io import fits

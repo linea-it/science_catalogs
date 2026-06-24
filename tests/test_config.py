@@ -4,6 +4,7 @@ from science_catalogs.utils.config import decide_suffix_and_flags
 
 
 def test_decide_suffix_and_flags_for_flux_with_dered_and_mag():
+    """Derive the expected suffix and flags for flux inputs with dereddening."""
     suffix, will_mag, will_dered_flux, will_dered_mag = decide_suffix_and_flags(
         {
             "which_release": "LSST_DP02",
@@ -22,6 +23,7 @@ def test_decide_suffix_and_flags_for_flux_with_dered_and_mag():
 
 
 def test_decide_suffix_and_flags_for_mag_without_dered():
+    """Leave the flags disabled when the input is already in magnitudes."""
     suffix, will_mag, will_dered_flux, will_dered_mag = decide_suffix_and_flags(
         {
             "which_release": "DES_DR2",

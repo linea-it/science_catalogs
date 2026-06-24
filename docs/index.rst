@@ -41,10 +41,11 @@ Quick example
    from science_catalogs import build_catalog, prepare_catalog, materialize_catalog
 
    prepared = prepare_catalog("configs/catalog.yml")
-   frame = materialize_catalog(prepared)
+   materialized = materialize_catalog(prepared, "./output")
+   frame = materialized["data"]
 
-   result = build_catalog("configs/catalog.yml", output_mode="memory")
-   print(result.data.head())
+   paths = build_catalog("configs/catalog.yml", output_dir="./output")
+   print(paths)
 
 Interactive demo
 ----------------------------------------------------------------------------------------

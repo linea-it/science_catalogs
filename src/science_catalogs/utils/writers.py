@@ -3,6 +3,7 @@
 import hashlib
 import os
 import re
+import shutil
 import tempfile
 import warnings
 from pathlib import Path
@@ -104,12 +105,15 @@ def write_hats_catalog(
     ra_col: str | None,
     dec_col: str | None,
     client=None,
+    *,
+    force_recreate: bool = False,
 ):
     """Materialize staging files and import them as a HATS collection."""
     if not ra_col or not dec_col:
         raise ValueError("HATS output requires both ra_col and dec_col")
 
     try:
+        from hats.io.validation import is_valid_catalog
         from hats_import.catalog.file_readers import CsvReader, ParquetReader
         from hats_import.collection.arguments import CollectionArguments
         from hats_import.collection.run_import import run
@@ -124,6 +128,16 @@ def write_hats_catalog(
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
+    artifact_path = output_path / artifact_name
+
+    if not force_recreate and is_valid_catalog(artifact_path):
+        return (str(artifact_path),)
+
+    if force_recreate and artifact_path.exists():
+        if artifact_path.is_dir():
+            shutil.rmtree(artifact_path)
+        else:
+            artifact_path.unlink()
 
     with tempfile.TemporaryDirectory(prefix="science_catalogs_hats_") as temp_dir:
         staging_dir = Path(temp_dir) / "staging"
@@ -173,7 +187,7 @@ def write_hats_catalog(
             if created_local_client is not None:
                 created_local_client.close()
 
-    return (str(output_path / artifact_name),)
+    return (str(artifact_path),)
 
 
 __all__ = ["write_partitions", "write_hats_catalog"]

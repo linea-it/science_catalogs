@@ -17,9 +17,18 @@ class _FakeDdf:
 
 
 def test_prepared_catalog_to_dataframe_uses_ddf_compute():
+    """Materialize a prepared catalog and preserve the written parquet path."""
     import pandas as pd
 
     dataframe = pd.DataFrame({"ra": [1.0], "dec": [2.0], "value": [3]})
+    calls = {}
+
+    def fake_write_catalog(prepared, output_dir, client=None, output_format=None):
+        calls["output_dir"] = output_dir
+        calls["client"] = client
+        calls["output_format"] = output_format
+        return (f"{output_dir}/_demo_part0.parquet",)
+
     prepared = PreparedCatalog(
         config={},
         ddf=_FakeDdf(dataframe),
@@ -29,13 +38,22 @@ def test_prepared_catalog_to_dataframe_uses_ddf_compute():
         dec_col="dec",
     )
 
-    result = materialize_catalog(prepared)
+    from science_catalogs import catalog as catalog_module
 
-    assert result is dataframe
-    assert materialize_catalog(prepared) is dataframe
+    original_write_catalog = catalog_module.write_catalog
+    catalog_module.write_catalog = fake_write_catalog
+    try:
+        result = materialize_catalog(prepared, "/tmp/out")
+    finally:
+        catalog_module.write_catalog = original_write_catalog
+
+    assert result["data"] is dataframe
+    assert result["path"] == "/tmp/out/_demo_part0.parquet"
+    assert calls["output_dir"] == "/tmp/out"
 
 
 def test_open_lsdb_catalog(monkeypatch):
+    """Delegate LSDB catalog opening to lsdb.open_catalog."""
     import sys
     import types
 
@@ -59,6 +77,7 @@ def test_open_lsdb_catalog(monkeypatch):
 
 
 def test_materialize_lsdb_catalog_uses_hats_output(monkeypatch):
+    """Write HATS output and reopen it lazily as an LSDB catalog."""
     import sys
     import types
 
@@ -74,12 +93,17 @@ def test_materialize_lsdb_catalog_uses_hats_output(monkeypatch):
     fake_lsdb.open_catalog = fake_open_catalog
     monkeypatch.setitem(sys.modules, "lsdb", fake_lsdb)
 
-    def fake_write_catalog(prepared, output_dir, client=None):
+    def fake_write_catalog(prepared, output_dir, client=None, output_format=None):
         calls["output_dir"] = output_dir
         calls["client"] = client
+        calls["output_format"] = output_format
         return (f"{output_dir}/demo_collection",)
 
     monkeypatch.setattr("science_catalogs.catalog.write_catalog", fake_write_catalog)
+    monkeypatch.setattr(
+        "science_catalogs.catalog.open_lsdb_catalog",
+        lambda path, client=None, **kwargs: fake_open_catalog(path, client=client, **kwargs),
+    )
 
     prepared = PreparedCatalog(
         config={},
@@ -90,9 +114,12 @@ def test_materialize_lsdb_catalog_uses_hats_output(monkeypatch):
         dec_col="dec",
     )
 
-    result = materialize_lsdb_catalog(prepared, "/tmp/out", highest_order=5)
+    result = materialize_lsdb_catalog(prepared, "/tmp/out", client="fake_client", highest_order=5)
 
-    assert result == "fake_catalog"
+    assert result["data"] == "fake_catalog"
+    assert result["path"] == "/tmp/out/demo_collection"
     assert calls["output_dir"] == "/tmp/out"
+    assert calls["output_format"] == "hats"
     assert calls["path"] == "/tmp/out/demo_collection"
+    assert calls["kwargs"]["client"] == "fake_client"
     assert calls["kwargs"]["highest_order"] == 5

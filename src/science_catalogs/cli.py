@@ -14,31 +14,29 @@ def main():
         "output_dir",
         nargs="?",
         default=None,
-        help="directory where processed files should be written when using disk or lsdb mode",
+        help="directory where processed files should be written",
     )
     parser.add_argument(
-        "--output-mode",
-        choices=("disk", "memory", "lsdb"),
-        default="disk",
-        help="whether to return the processed catalog in memory, write it to disk, or reopen it as LSDB",
+        "--output-format",
+        choices=("parquet", "hats"),
+        default=None,
+        help="override the configured on-disk output format",
     )
     args = parser.parse_args()
 
-    if args.output_mode in {"disk", "lsdb"} and args.output_dir is not None:
+    if args.output_dir is not None:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
     result = build_catalog(
         args.config_path,
-        output_mode=args.output_mode,
         output_dir=args.output_dir,
+        output_format=args.output_format,
     )
 
-    if result.output_mode == "memory" and result.data is not None:
-        print(f"Computed dataframe with {len(result.data)} rows")
-    elif result.output_mode == "disk":
-        print(f"Wrote {len(result.written_paths)} partition files")
-    elif result.output_mode == "lsdb" and result.catalog is not None:
-        print("Opened LSDB catalog")
+    if isinstance(result, tuple):
+        print(f"Wrote {len(result)} partition files")
+    else:
+        print(f"Wrote artifact to {result}")
 
 
 __all__ = ["main"]

@@ -30,9 +30,7 @@ def decide_suffix_and_flags(input_cfg: dict[str, Any], compute_mag: bool, comput
     """Derive output suffix and transformation flags from the input config."""
     input_col_type = input_cfg.get("input_col_type", "flux")
     if input_col_type not in ALLOWED_INPUT_TYPES:
-        raise ValueError(
-            f"Invalid input_col_type='{input_col_type}'. Allowed: {sorted(ALLOWED_INPUT_TYPES)}"
-        )
+        raise ValueError(f"Invalid input_col_type='{input_col_type}'. Allowed: {sorted(ALLOWED_INPUT_TYPES)}")
 
     will_mag = False
     will_dered_flux = False
@@ -63,7 +61,9 @@ def decide_suffix_and_flags(input_cfg: dict[str, Any], compute_mag: bool, comput
 
     elif input_col_type == "mag":
         if compute_mag:
-            raise ValueError("Cannot compute magnitude when input is already magnitude (input_col_type='mag').")
+            raise ValueError(
+                "Cannot compute magnitude when input is already magnitude (input_col_type='mag')."
+            )
         if compute_dered:
             suffix = "_mag_dered"
             will_dered_mag = True
@@ -76,9 +76,7 @@ def decide_suffix_and_flags(input_cfg: dict[str, Any], compute_mag: bool, comput
                 "Cannot compute magnitude when input is already magnitude (input_col_type='mag_dered')."
             )
         if compute_dered:
-            raise ValueError(
-                "Cannot deredden an already dereddened magnitude (input_col_type='mag_dered')."
-            )
+            raise ValueError("Cannot deredden an already dereddened magnitude (input_col_type='mag_dered').")
         suffix = "_mag_dered"
 
     out_kind = "mag" if (will_mag or str(input_col_type).startswith("mag")) else "flux"

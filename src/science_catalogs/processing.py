@@ -2,7 +2,6 @@
 
 import astropy.units as u
 import numpy as np
-import pandas as pd
 from astropy.coordinates import SkyCoord
 
 from science_catalogs.utils.config import as_float_or_none

@@ -19,7 +19,7 @@ def reorder_and_rechunk(ddf: dd.DataFrame, output_cfg: dict[str, Any]):
         ob = output_cfg.get("order_by")
         if isinstance(ob, str):
             order_cols = [ob]
-        elif isinstance(ob, (list, tuple)):
+        elif isinstance(ob, list | tuple):
             order_cols = list(ob)
         else:
             raise ValueError("order_by must be a string or list")

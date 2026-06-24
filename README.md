@@ -1,16 +1,13 @@
 # science_catalogs
 
-`science_catalogs` is a reusable Python library for building science-ready catalogs
-with LSDB-oriented workflows. The package focuses on the reusable core of the
-processing stack:
+`science_catalogs` is a reusable Python library for building science-ready
+catalogs with LSDB-oriented workflows. The package focuses on the reusable core
+of the processing stack:
 
 - column selection
 - column transformations
 - row filtering
 - output materialization to memory, partitioned files, or HATS catalogs
-
-Report generation, workflow orchestration, and product declaration stay outside
-this repository.
 
 The package is published on PyPI as `science-catalogs` and imported in Python as
 `science_catalogs`.
@@ -70,12 +67,15 @@ from science_catalogs import prepare_catalog
 prepared = prepare_catalog("configs/catalog.yml")
 ```
 
-Materialize the processed data in memory as a pandas dataframe:
+Materialize the processed data in memory and keep track of the written output
+paths:
 
 ```python
 from science_catalogs import materialize_catalog
 
-frame = materialize_catalog(prepared)
+result = materialize_catalog(prepared, "./output")
+frame = result["data"]
+paths = result["path"]
 ```
 
 Write the result to disk. The write mode follows the output configuration,
@@ -92,16 +92,27 @@ Open the final result as an LSDB catalog after writing HATS output:
 ```python
 from science_catalogs import materialize_lsdb_catalog
 
-catalog = materialize_lsdb_catalog(prepared, "./output")
+result = materialize_lsdb_catalog(prepared, "./output")
+catalog = result["data"]
+hats_path = result["path"]
 ```
 
-Execute the full flow from configuration in one call:
+Execute the full flow from configuration and persist parquet output in one call:
 
 ```python
 from science_catalogs import build_catalog
 
-result = build_catalog("configs/catalog.yml", output_mode="memory")
-frame = result.data
+paths = build_catalog("configs/catalog.yml", output_dir="./output")
+```
+
+Or force a HATS artifact from the same flow:
+
+```python
+hats_path = build_catalog(
+    "configs/catalog.yml",
+    output_dir="./output",
+    output_format="hats",
+)
 ```
 
 If you already have a HATS catalog on disk, you can open it directly:
@@ -112,9 +123,3 @@ from science_catalogs import open_lsdb_catalog
 catalog = open_lsdb_catalog("./output/my_catalog")
 ```
 
-## Scope
-
-This package is intentionally limited to reusable catalog preparation logic.
-Application-level concerns such as CLI execution, report generation, and
-workflow product registration should live in the downstream workflow repository
-that consumes this library.
