@@ -1,5 +1,5 @@
 input:
-  catalog_folder: examples/demo_catalog/data/input
+  catalog_folder: ../demo_catalog/data/input
   catalog_pattern: "*.parquet"
   which_release: LSST_DP02
   user_selected_cols:
@@ -50,9 +50,9 @@ output:
 cluster:
   executor: local
   local:
-    n_workers: 1
+    n_workers: 3
     threads_per_worker: 2
-    processes: false
+    memory_limit: "4GB"
 
 dust:
   path_to_dustmaps: null
