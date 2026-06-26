@@ -84,3 +84,14 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      - id: sphinx-docs-build
+        name: Build documentation
+        description: Build Sphinx documentation without executing notebooks.
+        entry: >-
+          python -m sphinx.cmd.build -M html docs _readthedocs
+          -T -E -d _readthedocs/doctrees
+          -D language=en
+          -D exclude_patterns=notebooks/*,_build,**.ipynb_checkpoints
+        language: system
+        pass_filenames: false
+        always_run: true

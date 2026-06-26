@@ -17,7 +17,7 @@ input:
   input_col_model: cmodel
   compute_magnitude: true
   compute_dereddening: false
-  keep_input_columns_when_computing_mag_or_dered: false
+  keep_input_columns_after_filters_or_transformations: false
   col_pattern: flux_BAND
   err_pattern: fluxerr_BAND
   selected_bands: [g, r]

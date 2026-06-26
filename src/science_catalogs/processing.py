@@ -9,6 +9,15 @@ from science_catalogs.utils.dust import get_dust_query
 from science_catalogs.utils.io_readers import detect_and_read
 
 MAG_CONV = np.log(10) * 0.4
+KEEP_INPUT_COLUMNS_KEY = "keep_input_columns_after_filters_or_transformations"
+LEGACY_KEEP_INPUT_COLUMNS_KEY = "keep_input_columns_when_computing_mag_or_dered"
+
+
+def _keep_input_columns(input_cfg):
+    """Resolve the input-column retention flag, preserving the legacy key."""
+    if KEEP_INPUT_COLUMNS_KEY in input_cfg:
+        return bool(input_cfg.get(KEEP_INPUT_COLUMNS_KEY))
+    return bool(input_cfg.get(LEGACY_KEEP_INPUT_COLUMNS_KEY, False))
 
 
 def process_file_df(
@@ -29,7 +38,6 @@ def process_file_df(
     output_cfg = cfgw.get("output", {})
     invalid = cfgw.get("invalid_handling", {})
 
-    which_release = input_cfg.get("which_release", "LSST_DP02")
     input_user_selected_cols = list(input_cfg.get("user_selected_cols", []) or [])
     is_id_index = bool(input_cfg.get("is_id_in_index", False))
 
@@ -42,7 +50,7 @@ def process_file_df(
     mag_offset = as_float_or_none(output_cfg.get("mag_offset"))
     a_ebv = dict(output_cfg.get("A_EBV", {}))
 
-    df = detect_and_read(path, which_release, input_user_selected_cols)
+    df = detect_and_read(path, input_user_selected_cols)
 
     filt = input_cfg.get("filter", {})
     if filt.get("enabled"):
@@ -152,14 +160,14 @@ def process_file_df(
             return np.where(mask, np.nan, arr)
         return np.where(mask, replacement_value, arr)
 
-    keep_inputs = bool(input_cfg.get("keep_input_columns_when_computing_mag_or_dered", False))
+    keep_inputs = _keep_input_columns(input_cfg)
 
     band_case = input_cfg.get("band_case") or output_cfg.get("band_case", "lower_case")
     col_final_pattern = output_cfg.get("col_final_pattern")
     err_final_pattern = output_cfg.get("err_final_pattern")
 
     input_cols_to_drop: list[str] = []
-    did_transform = bool(will_mag or will_dered_flux or will_dered_mag)
+    final_output_cols: set[str] = set()
 
     for band in selected_bands:
         col_in = col_pattern.replace("BAND", band)
@@ -168,6 +176,7 @@ def process_file_df(
         band_fmt = band.lower() if band_case == "lower_case" else band.upper()
         final_col = col_final_pattern.replace("BAND", band_fmt)
         final_err_col = err_final_pattern.replace("BAND", band_fmt)
+        final_output_cols.update([final_col, final_err_col])
 
         if col_in not in df.columns or err_in not in df.columns:
             raise ValueError(f"Missing column(s) {[col_in, err_in]} in file {path}")
@@ -183,8 +192,9 @@ def process_file_df(
 
         if will_mag:
             f_curr = values
-            values = -2.5 * np.log10(f_curr) + float(mag_offset)
-            errors = errors / (f_curr * MAG_CONV)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                values = -2.5 * np.log10(f_curr) + float(mag_offset)
+                errors = errors / (f_curr * MAG_CONV)
 
         if will_dered_mag:
             a_lambda = df["E_BV"].values * a_ebv[band]
@@ -218,8 +228,8 @@ def process_file_df(
     if needs_ebv and "E_BV" in df.columns:
         df.drop(columns=["E_BV"], inplace=True)
 
-    if did_transform and not keep_inputs:
-        drop_cols = [c for c in set(input_cols_to_drop) if c in df.columns]
+    if not keep_inputs:
+        drop_cols = [c for c in set(input_cols_to_drop) if c in df.columns and c not in final_output_cols]
         if drop_cols:
             df.drop(columns=drop_cols, inplace=True)
 
