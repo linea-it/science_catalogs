@@ -41,7 +41,7 @@ dependencies = [
     "h5py",
     "cdshealpix==0.7.2",
     "lsdb==0.7.3",
-    "hats==0.7.3",
+    "hats==0.9.2",
     "hats-import==0.7.3",
 ]
 
