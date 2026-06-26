@@ -1,0 +1,24 @@
+# Changes here will be overwritten by Copier
+_commit: v2.2.0-15-ga7522ba
+_src_path: gh:lincc-frameworks/python-project-template
+author_email: ''
+author_name: LIneA IT
+create_example_module: false
+custom_install: custom
+enforce_style:
+- ruff_lint
+- ruff_format
+failure_notification: []
+include_benchmarks: true
+include_docs: true
+include_notebooks: true
+mypy_type_checking: none
+package_name: science_catalogs
+project_description: Reusable toolkit for science-ready catalog preparation with Dask,
+    LSDB, and HATS.
+project_license: MIT
+project_name: science_catalogs
+project_organization: linea-it
+python_versions:
+- '3.12'
+test_lowest_version: none

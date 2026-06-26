@@ -1,0 +1,125 @@
+[build-system]
+requires = [
+    "setuptools>=82.0.1",
+    "setuptools_scm>=9.2.2",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "science-catalogs"
+dynamic = ["version"]
+description = "Reusable toolkit for science-ready catalog preparation with Dask, LSDB, and HATS."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "LIneA IT" },
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Astronomy",
+]
+dependencies = [
+    "numpy",
+    "pandas",
+    "pyyaml",
+    "dask==2025.3.0",
+    "distributed==2025.3.0",
+    "dask-jobqueue==0.9.0",
+    "astropy",
+    "dustmaps",
+    "tables-io==1.0.0",
+    "bokeh==3.4.*",
+    "jinja2==3.1.*",
+    "h5py",
+    "cdshealpix==0.7.2",
+    "lsdb==0.7.3",
+    "hats==0.7.3",
+    "hats-import==0.7.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "asv[virtualenv]==0.6.5",
+    "build",
+    "jupyter",
+    "pre-commit",
+    "pytest",
+    "pytest-cov",
+    "ruff",
+    "sphinx",
+    "sphinx-autoapi",
+    "sphinx-copybutton",
+    "sphinx-rtd-theme>=3.1.0",
+    "twine",
+    "nbsphinx",
+]
+
+[project.scripts]
+science-catalogs = "science_catalogs.cli:main"
+
+[project.urls]
+"Source Code" = "https://github.com/linea-it/science_catalogs"
+Issues = "https://github.com/linea-it/science_catalogs/issues"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools_scm]
+write_to = "src/science_catalogs/_version.py"
+
+[tool.pytest.ini_options]
+testpaths = [
+    "tests",
+    "src",
+    "docs",
+]
+addopts = "--doctest-modules --doctest-glob=*.rst"
+
+[tool.ruff]
+line-length = 110
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "W",
+    "F",
+    "N",
+    "UP",
+    "B",
+    "SIM",
+    "I",
+    "D101",
+    "D102",
+    "D103",
+    "D106",
+    "D206",
+    "D207",
+    "D208",
+    "D300",
+    "D417",
+    "D419",
+    "NPY201",
+]
+ignore = [
+    "UP006",
+    "UP007",
+    "SIM114",
+    "B028",
+    "SIM117",
+    "UP015",
+    "UP028",
+]
+
+[tool.coverage.run]
+omit = ["src/science_catalogs/_version.py"]
