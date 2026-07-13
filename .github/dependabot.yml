@@ -3,8 +3,35 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "monthly"
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
-      interval: "monthly"
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "python"
+    open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: "dask"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "distributed"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "lsdb"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "hats"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "hats-import"
+        update-types: ["version-update:semver-major"]
+    groups:
+      python-dependencies:
+        patterns:
+          - "*"
