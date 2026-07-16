@@ -2,7 +2,6 @@
 
 import pandas as pd
 import yaml
-
 from science_catalogs.processing import process_dataframe, process_file_df
 
 

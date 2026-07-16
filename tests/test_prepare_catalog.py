@@ -5,7 +5,6 @@ from pathlib import Path
 import dask.dataframe as dd
 import pandas as pd
 import pytest
-
 from science_catalogs.catalog import _resolve_input_source, prepare_catalog
 
 

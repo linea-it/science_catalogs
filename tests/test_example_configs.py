@@ -6,7 +6,6 @@ import numpy as np
 import pytest
 import yaml
 from pandas.testing import assert_frame_equal
-
 from science_catalogs import processing
 from science_catalogs.processing import MAG_CONV, process_file_df
 from science_catalogs.utils.config import as_float_or_none, decide_suffix_and_flags
