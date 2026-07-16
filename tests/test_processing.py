@@ -1,7 +1,8 @@
 """Tests for per-file catalog processing."""
 
+import pandas as pd
 import yaml
-from science_catalogs.processing import process_file_df
+from science_catalogs.processing import process_dataframe, process_file_df
 
 
 def _write_mag_dered_inputs(tmp_path, keep_key, keep_value):
@@ -73,3 +74,27 @@ def test_legacy_keep_input_columns_key_still_works(tmp_path):
     assert "magerr_g" in df.columns
     assert "MAG_G_DERED" in df.columns
     assert "MAGERR_G" in df.columns
+
+
+def test_process_dataframe_matches_file_wrapper(tmp_path):
+    """Apply the same science logic when the input is already in memory."""
+    input_path, cfg_path = _write_mag_dered_inputs(
+        tmp_path,
+        "keep_input_columns_after_filters_or_transformations",
+        False,
+    )
+
+    config = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    dataframe = pd.read_csv(input_path)
+
+    from_file = process_file_df(str(input_path), str(cfg_path), False, False, False)
+    from_dataframe = process_dataframe(
+        dataframe,
+        config,
+        will_mag=False,
+        will_dered_flux=False,
+        will_dered_mag=False,
+        source_name="memory.csv",
+    )
+
+    assert from_dataframe.equals(from_file)

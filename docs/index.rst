@@ -4,6 +4,9 @@ science_catalogs
 ``science_catalogs`` is a reusable toolkit for preparing science-ready catalogs
 with Dask, LSDB, and HATS.
 
+``prepare_catalog`` accepts a single input path and detects whether it points
+to a regular file collection or an existing HATS catalog.
+
 Beta public API
 ----------------------------------------------------------------------------------------
 
@@ -55,6 +58,7 @@ A runnable example with fictitious parquet inputs lives in
 
 - sample parquet files
 - YAML configs for parquet and HATS output
+- documentation for using an existing HATS catalog as input
 - an interactive walkthrough
 - a smoke test script
 

@@ -8,6 +8,40 @@ This package is designed around two layers:
 - ``materialize_catalog`` and ``materialize_lsdb_catalog`` return ``data`` plus
   the written output ``path``.
 
+Use ``materialize_catalog`` only when the final dataframe is expected to fit in
+memory. For larger catalogs, prefer ``build_catalog``, ``write_catalog``, or
+``materialize_lsdb_catalog`` so the workflow stays distributed and disk-backed.
+
+Input modes
+----------------------------------------------------------------------------------------
+
+``prepare_catalog`` can start from two kinds of inputs:
+
+- a regular file or directory
+- an existing HATS catalog opened through LSDB
+
+For file-based inputs, use a single path:
+
+.. code-block:: yaml
+
+   input:
+     catalog_path: /path/to/files_or_file
+     catalog_pattern: "*.parquet"
+
+If ``catalog_path`` is a single file, it is used directly. If it is a regular
+directory, ``catalog_pattern`` is used to find the files to process.
+
+For HATS-based inputs, point ``catalog_path`` to the existing catalog
+directory:
+
+.. code-block:: yaml
+
+   input:
+     catalog_path: /path/to/existing_hats_catalog
+
+In both cases, ``user_selected_cols`` still defines the columns projected into
+the processing step.
+
 Minimal interactive flow
 ----------------------------------------------------------------------------------------
 
