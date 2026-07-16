@@ -1,4 +1,4 @@
-"""Per-file processing logic."""
+"""Catalog processing logic shared by file and HATS inputs."""
 
 import astropy.units as u
 import numpy as np
@@ -20,25 +20,30 @@ def _keep_input_columns(input_cfg):
     return bool(input_cfg.get(LEGACY_KEEP_INPUT_COLUMNS_KEY, False))
 
 
-def process_file_df(
-    path: str,
-    cfg_path: str,
+def _load_processing_config(cfg_path: str) -> dict:
+    """Load the processing configuration from disk without importing catalog helpers."""
+    import yaml
+
+    with open(cfg_path, "r", encoding="utf-8") as _file:
+        return yaml.safe_load(_file) or {}
+
+
+def process_dataframe(
+    df,
+    cfg: dict,
+    *,
     will_mag: bool,
     will_dered_flux: bool,
     will_dered_mag: bool,
+    source_name: str = "<dataframe>",
 ):
-    """Read, filter, transform, and return a single catalog file as a dataframe."""
-    import yaml
+    """Filter and transform a dataframe according to the catalog configuration."""
+    df = df.copy()
+    input_cfg = cfg.get("input", {})
+    dust_cfg = cfg.get("dust", {})
+    output_cfg = cfg.get("output", {})
+    invalid = cfg.get("invalid_handling", {})
 
-    with open(cfg_path, "r", encoding="utf-8") as _f:
-        cfgw = yaml.safe_load(_f) or {}
-
-    input_cfg = cfgw.get("input", {})
-    dust_cfg = cfgw.get("dust", {})
-    output_cfg = cfgw.get("output", {})
-    invalid = cfgw.get("invalid_handling", {})
-
-    input_user_selected_cols = list(input_cfg.get("user_selected_cols", []) or [])
     is_id_index = bool(input_cfg.get("is_id_in_index", False))
 
     col_pattern = input_cfg.get("col_pattern")
@@ -50,14 +55,12 @@ def process_file_df(
     mag_offset = as_float_or_none(output_cfg.get("mag_offset"))
     a_ebv = dict(output_cfg.get("A_EBV", {}))
 
-    df = detect_and_read(path, input_user_selected_cols)
-
     filt = input_cfg.get("filter", {})
     if filt.get("enabled"):
         col = filt.get("column")
         val = filt.get("value")
         if col not in df.columns:
-            raise ValueError(f"Boolean column '{col}' not found in {path}")
+            raise ValueError(f"Boolean column '{col}' not found in {source_name}")
         df = df[df[col] == val]
         if filt.get("drop_column_after_filter") and col in df.columns:
             df = df.drop(columns=[col])
@@ -66,7 +69,7 @@ def process_file_df(
     if init.get("enabled"):
         cut_col = init.get("column")
         if cut_col not in df.columns:
-            raise ValueError(f"Initial-cut column '{cut_col}' not found in {path}")
+            raise ValueError(f"Initial-cut column '{cut_col}' not found in {source_name}")
         col_type = str(init.get("column_type", "flux")).strip().lower()
         mag_val = as_float_or_none(init.get("mag_value"))
         flux_val = as_float_or_none(init.get("flux_value"))
@@ -179,7 +182,7 @@ def process_file_df(
         final_output_cols.update([final_col, final_err_col])
 
         if col_in not in df.columns or err_in not in df.columns:
-            raise ValueError(f"Missing column(s) {[col_in, err_in]} in file {path}")
+            raise ValueError(f"Missing column(s) {[col_in, err_in]} in source {source_name}")
 
         values = df[col_in].astype(float, copy=False).values
         errors = df[err_in].astype(float, copy=False).values
@@ -239,4 +242,26 @@ def process_file_df(
     return df
 
 
-__all__ = ["process_file_df", "MAG_CONV"]
+def process_file_df(
+    path: str,
+    cfg_path: str,
+    will_mag: bool,
+    will_dered_flux: bool,
+    will_dered_mag: bool,
+):
+    """Read, filter, transform, and return a single catalog file as a dataframe."""
+    cfgw = _load_processing_config(cfg_path)
+    input_cfg = cfgw.get("input", {})
+    input_user_selected_cols = list(input_cfg.get("user_selected_cols", []) or [])
+    df = detect_and_read(path, input_user_selected_cols)
+    return process_dataframe(
+        df,
+        cfgw,
+        will_mag=will_mag,
+        will_dered_flux=will_dered_flux,
+        will_dered_mag=will_dered_mag,
+        source_name=path,
+    )
+
+
+__all__ = ["process_dataframe", "process_file_df", "MAG_CONV"]
