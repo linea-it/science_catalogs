@@ -121,5 +121,28 @@ ignore = [
     "UP028",
 ]
 
+[tool.ruff.lint.per-file-ignores]
+"*.ipynb" = [
+    "E",
+    "W",
+    "F",
+    "N",
+    "UP",
+    "B",
+    "SIM",
+    "I",
+    "D101",
+    "D102",
+    "D103",
+    "D106",
+    "D206",
+    "D207",
+    "D208",
+    "D300",
+    "D417",
+    "D419",
+    "NPY201",
+]
+
 [tool.coverage.run]
 omit = ["src/science_catalogs/_version.py"]

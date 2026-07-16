@@ -81,9 +81,7 @@ def _resolve_input_source(inputs: dict[str, Any]) -> dict[str, Any]:
     if catalog_path.is_dir():
         input_files = _glob_input_files(catalog_path, pattern)
         if not input_files:
-            raise FileNotFoundError(
-                f"No input files found under {catalog_path} matching pattern {pattern!r}"
-            )
+            raise FileNotFoundError(f"No input files found under {catalog_path} matching pattern {pattern!r}")
         return {"source": "files", "input_files": input_files}
 
     raise ValueError(f"Unsupported input path type: {catalog_path}")
