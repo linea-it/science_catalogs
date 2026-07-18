@@ -230,8 +230,6 @@ def open_lsdb_catalog(catalog_path: str | Path, client=None, **kwargs):
     """Open an LSDB catalog from a HATS path on disk."""
     import lsdb
 
-    if client is not None:
-        kwargs["client"] = client
     return lsdb.open_catalog(str(catalog_path), **kwargs)
 
 
