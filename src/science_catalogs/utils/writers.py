@@ -64,7 +64,8 @@ def _write_part(
     out_path = os.path.join(base_dir, fname)
 
     if ext == "parquet":
-        pdf.to_parquet(out_path, index=False)
+        # NestedFrame.to_parquet delegates to pyarrow and does not accept index=...
+        pd.DataFrame(pdf.reset_index(drop=True)).to_parquet(out_path, index=False)
     elif ext == "csv":
         pdf.to_csv(out_path, index=False)
     elif ext == "h5":
@@ -114,7 +115,7 @@ def write_hats_catalog(
 
     try:
         from hats.io.validation import is_valid_catalog
-        from hats_import.catalog.file_readers import CsvReader, ParquetReader
+        from hats_import.catalog.file_readers import CsvReader, ParquetPyarrowReader
         from hats_import.collection.arguments import CollectionArguments
         from hats_import.collection.run_import import run
     except Exception as exc:  # pragma: no cover
@@ -148,7 +149,7 @@ def write_hats_catalog(
         written_paths = write_partitions(ddf_out, staging_cfg, str(staging_dir), suffix)
 
         if source_format == "parquet":
-            file_reader = ParquetReader()
+            file_reader = ParquetPyarrowReader()
         elif source_format == "csv":
             file_reader = CsvReader()
         else:  # pragma: no cover
