@@ -11,10 +11,12 @@ from science_catalogs.processing import MAG_CONV, process_file_df
 from science_catalogs.utils.config import as_float_or_none, decide_suffix_and_flags
 from science_catalogs.utils.io_readers import detect_and_read
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
 EXAMPLE_CONFIGS = [
-    Path("examples/configs/des_dr2_mag_auto_dered.yml"),
-    Path("examples/configs/lsst_dp02_cmodel_mag_dered.yml"),
-    Path("examples/configs/lsst_dp1_cmodel_mag_dered.yml"),
+    REPO_ROOT / "examples/configs/des_dr2_mag_auto_dered.yml",
+    REPO_ROOT / "examples/configs/lsst_dp02_cmodel_mag_dered.yml",
+    REPO_ROOT / "examples/configs/lsst_dp1_cmodel_mag_dered.yml",
 ]
 
 
@@ -30,7 +32,8 @@ def _load_config(path):
 
 def _configured_input_file(config):
     input_cfg = config["input"]
-    return next(Path(input_cfg["catalog_folder"]).glob(input_cfg["catalog_pattern"]))
+    catalog_folder = REPO_ROOT / input_cfg["catalog_folder"]
+    return next(catalog_folder.glob(input_cfg["catalog_pattern"]))
 
 
 def _comparison_mask(values, threshold, how, use_abs):

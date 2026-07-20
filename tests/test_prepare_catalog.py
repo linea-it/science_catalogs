@@ -137,8 +137,16 @@ def test_prepare_catalog_reads_hats_input(monkeypatch, tmp_path):
     fake_client = object()
 
     class _FakeCatalog:
+        def __init__(self, ddf):
+            self._ddf = ddf
+
         def to_dask_dataframe(self):
-            return dd.from_pandas(source_df, npartitions=2)
+            return self._ddf
+
+        def map_partitions(self, func, *args, **kwargs):
+            meta = kwargs.pop("meta")
+            mapped = self._ddf.map_partitions(func, *args, meta=meta, **kwargs)
+            return _FakeCatalog(mapped)
 
     monkeypatch.setattr("science_catalogs.catalog.configure_dustmaps_path", lambda dust: None)
     monkeypatch.setattr(
@@ -152,7 +160,7 @@ def test_prepare_catalog_reads_hats_input(monkeypatch, tmp_path):
         calls["path"] = path
         calls["client"] = client
         calls["columns"] = kwargs.get("columns")
-        return _FakeCatalog()
+        return _FakeCatalog(dd.from_pandas(source_df, npartitions=2))
 
     monkeypatch.setattr("science_catalogs.catalog.open_lsdb_catalog", fake_open_lsdb_catalog)
 
