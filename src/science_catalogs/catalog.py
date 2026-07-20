@@ -152,22 +152,24 @@ def prepare_catalog(
             client=client,
             columns=selected_columns,
         )
-        ddf = hats_catalog.to_dask_dataframe()
-        ddf = ddf.map_partitions(
+        processed_catalog = hats_catalog.map_partitions(
             process_dataframe,
             cfg,
             will_mag=will_mag,
             will_dered_flux=will_dered_flux,
             will_dered_mag=will_dered_mag,
             source_name=input_source["catalog_path"],
+            transform_divisions=False,
+            clear_divisions=True,
             meta=_build_processed_meta(
-                ddf,
+                hats_catalog.to_dask_dataframe(),
                 cfg,
                 will_mag=will_mag,
                 will_dered_flux=will_dered_flux,
                 will_dered_mag=will_dered_mag,
             ),
         )
+        ddf = processed_catalog.to_dask_dataframe()
     ddf_out = reorder_and_rechunk(ddf, output_cfg)
 
     return PreparedCatalog(
@@ -230,8 +232,6 @@ def open_lsdb_catalog(catalog_path: str | Path, client=None, **kwargs):
     """Open an LSDB catalog from a HATS path on disk."""
     import lsdb
 
-    if client is not None:
-        kwargs["client"] = client
     return lsdb.open_catalog(str(catalog_path), **kwargs)
 
 
