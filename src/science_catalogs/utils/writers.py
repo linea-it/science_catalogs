@@ -140,10 +140,10 @@ def write_hats_catalog(
         else:
             artifact_path.unlink()
 
-    with tempfile.TemporaryDirectory(prefix="science_catalogs_hats_") as temp_dir:
-        staging_dir = Path(temp_dir) / "staging"
-        staging_dir.mkdir(parents=True, exist_ok=True)
+    # The staging files must live on a filesystem shared by Dask workers.
+    staging_dir = Path(tempfile.mkdtemp(prefix=f".{artifact_name}_staging_", dir=str(output_path)))
 
+    try:
         staging_cfg = dict(output_cfg)
         staging_cfg["save_as"] = source_format
         written_paths = write_partitions(ddf_out, staging_cfg, str(staging_dir), suffix)
@@ -187,6 +187,8 @@ def write_hats_catalog(
         finally:
             if created_local_client is not None:
                 created_local_client.close()
+    finally:
+        shutil.rmtree(staging_dir, ignore_errors=True)
 
     return (str(artifact_path),)
 
