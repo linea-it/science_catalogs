@@ -144,6 +144,7 @@ def test_prepare_catalog_reads_hats_input(monkeypatch, tmp_path):
             return self._ddf
 
         def map_partitions(self, func, *args, **kwargs):
+            calls["map_partitions_kwargs"] = dict(kwargs)
             meta = kwargs.pop("meta")
             mapped = self._ddf.map_partitions(func, *args, meta=meta, **kwargs)
             return _FakeCatalog(mapped)
@@ -171,5 +172,7 @@ def test_prepare_catalog_reads_hats_input(monkeypatch, tmp_path):
     assert calls["path"] == str(hats_path)
     assert calls["client"] is fake_client
     assert calls["columns"] == ["object_id", "ra", "dec", "MAG_G_DERED", "MAGERR_G"]
+    assert "transform_divisions" not in calls["map_partitions_kwargs"]
+    assert "clear_divisions" not in calls["map_partitions_kwargs"]
     assert list(result.columns) == ["object_id", "ra", "dec", "mag_g", "magerr_g"]
     assert len(result) == 2

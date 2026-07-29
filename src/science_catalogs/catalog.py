@@ -159,8 +159,6 @@ def prepare_catalog(
             will_dered_flux=will_dered_flux,
             will_dered_mag=will_dered_mag,
             source_name=input_source["catalog_path"],
-            transform_divisions=False,
-            clear_divisions=True,
             meta=_build_processed_meta(
                 hats_catalog.to_dask_dataframe(),
                 cfg,
@@ -169,7 +167,7 @@ def prepare_catalog(
                 will_dered_mag=will_dered_mag,
             ),
         )
-        ddf = processed_catalog.to_dask_dataframe()
+        ddf = processed_catalog.to_dask_dataframe().clear_divisions()
     ddf_out = reorder_and_rechunk(ddf, output_cfg)
 
     return PreparedCatalog(
