@@ -106,7 +106,6 @@ cluster:
 
 dust:
   path_to_dustmaps: null
-  use_dustmap: sfd
   distance_col_pc: null
   distance_fixed_pc: null
 

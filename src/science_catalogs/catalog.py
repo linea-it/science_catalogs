@@ -121,12 +121,13 @@ def prepare_catalog(
     dust = cfg.get("dust", {})
     output_cfg = cfg.get("output", {})
 
-    configure_dustmaps_path(dust)
+    configure_dustmaps_path(dust, client=client)
 
     suffix, will_mag, will_dered_flux, will_dered_mag = decide_suffix_and_flags(
         inputs,
         inputs.get("compute_magnitude", True),
         inputs.get("compute_dereddening", True),
+        dust,
     )
 
     input_source = _resolve_input_source(inputs)

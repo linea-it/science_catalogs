@@ -10,10 +10,10 @@ def test_decide_suffix_and_flags_for_flux_with_dered_and_mag():
             "which_release": "LSST_DP02",
             "input_col_type": "flux",
             "input_col_model": "cmodel",
-            "use_dustmap": "sfd",
         },
         compute_mag=True,
         compute_dered=True,
+        dust_cfg={"use_dustmap": "sfd"},
     )
 
     assert suffix == "_LSST_DP02_mag_cmodel_sfd"
