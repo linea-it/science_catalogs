@@ -1,0 +1,63 @@
+# Run example:
+# science-catalogs examples/configs/lsst_dp1_to_hats.yml examples/output/lsst_dp1_to_hats
+
+input:
+  catalog_folder: tests/data
+  catalog_pattern: "lsst_dp1_scrambled_sample_1000.parq"
+  which_release: LSST_DP1
+  # Empty means "read all columns" from the original catalog.
+  user_selected_cols: []
+  is_id_in_index: false
+  input_col_type: flux
+  input_col_model: original
+  compute_magnitude: false
+  compute_dereddening: false
+  keep_input_columns_after_filters_or_transformations: true
+  selected_bands: []
+  ra_col: coord_ra
+  dec_col: coord_dec
+  filter:
+    enabled: false
+    column: null
+    value: null
+    drop_column_after_filter: false
+  initial_cut:
+    enabled: false
+    column: null
+    column_type: flux
+    mag_value: null
+    flux_value: null
+
+output:
+  save_as: hats
+  hats_source_save_as: parquet
+  hats_artifact_name: lsst_dp1_hats
+  base_path: examples/output/lsst_dp1_to_hats
+  target_rows_per_part: null
+  order_by: null
+  col_for_filename: null
+
+cluster:
+  executor: local
+  local:
+    n_workers: 3
+    threads_per_worker: 2
+    memory_limit: "4GB"
+  # To run with a SLURM cluster, switch executor to slurm and uncomment:
+  # executor: slurm
+  # slurm:
+  #   interface: ib0
+  #   queue: cpu
+  #   cores: 2
+  #   processes: 1
+  #   memory: 48GB
+  #   walltime: "01:00:00"
+  #   job_extra_directives:
+  #     - "--account=<account>"
+  #   dask_scale_number: 15
+
+dust:
+  path_to_dustmaps: null
+
+collection:
+  margin_threshold: 10.0
