@@ -5,6 +5,7 @@ from pathlib import Path
 import dask.dataframe as dd
 import pandas as pd
 import pytest
+from dask import delayed
 from science_catalogs.catalog import _resolve_input_source, prepare_catalog
 
 
@@ -143,12 +144,6 @@ def test_prepare_catalog_reads_hats_input(monkeypatch, tmp_path):
         def to_dask_dataframe(self):
             return self._ddf
 
-        def map_partitions(self, func, *args, **kwargs):
-            calls["map_partitions_kwargs"] = dict(kwargs)
-            meta = kwargs.pop("meta")
-            mapped = self._ddf.map_partitions(func, *args, meta=meta, **kwargs)
-            return _FakeCatalog(mapped)
-
     monkeypatch.setattr("science_catalogs.catalog.configure_dustmaps_path", lambda dust, client=None: None)
     monkeypatch.setattr(
         "science_catalogs.catalog.decide_suffix_and_flags",
@@ -172,8 +167,6 @@ def test_prepare_catalog_reads_hats_input(monkeypatch, tmp_path):
     assert calls["path"] == str(hats_path)
     assert calls["client"] is fake_client
     assert calls["columns"] == ["object_id", "ra", "dec", "MAG_G_DERED", "MAGERR_G"]
-    assert "transform_divisions" not in calls["map_partitions_kwargs"]
-    assert "clear_divisions" not in calls["map_partitions_kwargs"]
     assert list(result.columns) == ["object_id", "ra", "dec", "mag_g", "magerr_g"]
     assert len(result) == 2
 
@@ -201,22 +194,23 @@ def test_prepare_catalog_aligns_hats_partition_columns_to_meta(monkeypatch, tmp_
             "dec": [-20.0, -21.0],
         }
     )
-    actual_ddf = dd.from_pandas(source_df, npartitions=2)
-    meta_ddf = dd.from_pandas(source_df[["ra", "dec", "tract", "patch"]], npartitions=2)
+    meta = source_df[["ra", "dec", "tract", "patch"]].iloc[:0]
+    actual_ddf = dd.from_delayed(
+        [
+            delayed(lambda: source_df.iloc[:1])(),
+            delayed(lambda: source_df.iloc[1:])(),
+        ],
+        meta=meta,
+        verify_meta=False,
+    )
     calls = {}
 
     class _FakeCatalog:
-        def __init__(self, ddf, meta_source=None):
+        def __init__(self, ddf):
             self._ddf = ddf
-            self._meta_source = meta_source if meta_source is not None else ddf
 
         def to_dask_dataframe(self):
-            return self._meta_source
-
-        def map_partitions(self, func, *args, **kwargs):
-            meta = kwargs.pop("meta")
-            mapped = self._ddf.map_partitions(func, *args, meta=meta, **kwargs)
-            return _FakeCatalog(mapped)
+            return self._ddf
 
     monkeypatch.setattr("science_catalogs.catalog.configure_dustmaps_path", lambda dust, client=None: None)
     monkeypatch.setattr(
@@ -228,7 +222,7 @@ def test_prepare_catalog_aligns_hats_partition_columns_to_meta(monkeypatch, tmp_
 
     def fake_open_lsdb_catalog(*args, **kwargs):
         calls["columns"] = kwargs.get("columns")
-        return _FakeCatalog(actual_ddf, meta_ddf)
+        return _FakeCatalog(actual_ddf)
 
     monkeypatch.setattr("science_catalogs.catalog.open_lsdb_catalog", fake_open_lsdb_catalog)
 

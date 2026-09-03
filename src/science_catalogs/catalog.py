@@ -153,14 +153,15 @@ def prepare_catalog(
             client=client,
             columns=selected_columns,
         )
+        hats_ddf = hats_catalog.to_dask_dataframe()
         processed_meta = _build_processed_meta(
-            hats_catalog.to_dask_dataframe(),
+            hats_ddf,
             cfg,
             will_mag=will_mag,
             will_dered_flux=will_dered_flux,
             will_dered_mag=will_dered_mag,
         )
-        processed_catalog = hats_catalog.map_partitions(
+        ddf = hats_ddf.map_partitions(
             process_dataframe,
             cfg,
             will_mag=will_mag,
@@ -169,8 +170,7 @@ def prepare_catalog(
             source_name=input_source["catalog_path"],
             output_columns=tuple(processed_meta.columns),
             meta=processed_meta,
-        )
-        ddf = processed_catalog.to_dask_dataframe().clear_divisions()
+        ).clear_divisions()
     ddf_out = reorder_and_rechunk(ddf, output_cfg)
 
     return PreparedCatalog(
