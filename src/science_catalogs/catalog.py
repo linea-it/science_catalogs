@@ -16,6 +16,7 @@ from science_catalogs.executor import get_executor
 from science_catalogs.processing import process_dataframe, process_file_df
 from science_catalogs.utils.config import decide_suffix_and_flags
 from science_catalogs.utils.dust import configure_dustmaps_path
+from science_catalogs.utils.io_readers import detect_and_read
 from science_catalogs.utils.partitioning import reorder_and_rechunk
 from science_catalogs.utils.writers import write_hats_catalog, write_partitions
 
@@ -108,6 +109,28 @@ def _build_processed_meta(
     return meta_output.iloc[:0]
 
 
+def _build_file_processed_meta(
+    path: str,
+    cfg: dict[str, Any],
+    *,
+    will_mag: bool,
+    will_dered_flux: bool,
+    will_dered_mag: bool,
+):
+    """Infer processed schema for file inputs from a representative input file."""
+    input_cfg = cfg.get("input", {})
+    selected_columns = list(input_cfg.get("user_selected_cols", []) or [])
+    meta_input = detect_and_read(path, selected_columns).iloc[:0]
+    return process_dataframe(
+        meta_input,
+        cfg,
+        will_mag=will_mag,
+        will_dered_flux=will_dered_flux,
+        will_dered_mag=will_dered_mag,
+        source_name="<meta>",
+    ).iloc[:0]
+
+
 def prepare_catalog(
     config_path: str,
     config: dict[str, Any] | None = None,
@@ -134,6 +157,13 @@ def prepare_catalog(
 
     if input_source["source"] == "files":
         input_files = input_source["input_files"]
+        processed_meta = _build_file_processed_meta(
+            input_files[0],
+            cfg,
+            will_mag=will_mag,
+            will_dered_flux=will_dered_flux,
+            will_dered_mag=will_dered_mag,
+        )
         delayed_dfs = [
             delayed(process_file_df)(
                 p,
@@ -141,10 +171,11 @@ def prepare_catalog(
                 will_mag=will_mag,
                 will_dered_flux=will_dered_flux,
                 will_dered_mag=will_dered_mag,
+                output_columns=tuple(processed_meta.columns),
             )
             for p in input_files
         ]
-        ddf = dd.from_delayed(delayed_dfs)
+        ddf = dd.from_delayed(delayed_dfs, meta=processed_meta)
     else:
         input_files = [input_source["catalog_path"]]
         selected_columns = list(inputs.get("user_selected_cols", []) or []) or "all"

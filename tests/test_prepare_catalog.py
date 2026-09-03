@@ -97,10 +97,31 @@ def test_prepare_catalog_keeps_file_mode_behavior(monkeypatch, tmp_path):
         lambda *args, **kwargs: ("_demo", False, False, False),
     )
     monkeypatch.setattr("science_catalogs.catalog.reorder_and_rechunk", lambda ddf, output_cfg: ddf)
+    monkeypatch.setattr(
+        "science_catalogs.catalog._build_file_processed_meta",
+        lambda *args, **kwargs: pd.DataFrame(
+            {
+                "ra": pd.Series(dtype="float64"),
+                "dec": pd.Series(dtype="float64"),
+                "mag_g": pd.Series(dtype="float64"),
+                "magerr_g": pd.Series(dtype="float64"),
+            }
+        ),
+    )
 
-    def fake_process_file_df(path, cfg_path, will_mag, will_dered_flux, will_dered_mag):
+    def fake_process_file_df(
+        path,
+        cfg_path,
+        will_mag,
+        will_dered_flux,
+        will_dered_mag,
+        output_columns=None,
+    ):
         seen.append(Path(path).name)
-        return pd.DataFrame({"ra": [1.0], "dec": [2.0], "mag_g": [22.5], "magerr_g": [0.1]})
+        df = pd.DataFrame({"ra": [1.0], "dec": [2.0], "mag_g": [22.5], "magerr_g": [0.1]})
+        if output_columns is not None:
+            df = df.loc[:, list(output_columns)]
+        return df
 
     monkeypatch.setattr("science_catalogs.catalog.process_file_df", fake_process_file_df)
 
@@ -110,6 +131,71 @@ def test_prepare_catalog_keeps_file_mode_behavior(monkeypatch, tmp_path):
     assert set(prepared.input_files) == {str(first), str(second)}
     assert {"part1.csv", "part2.csv"}.issubset(set(seen))
     assert list(result.columns) == ["ra", "dec", "mag_g", "magerr_g"]
+    assert len(result) == 2
+
+
+def test_prepare_catalog_aligns_file_partition_columns_to_meta(monkeypatch, tmp_path):
+    """Normalize file-input partition column order before Dask validates metadata."""
+    first = tmp_path / "part1.parq"
+    second = tmp_path / "part2.parq"
+    first.write_text("", encoding="utf-8")
+    second.write_text("", encoding="utf-8")
+
+    cfg = {
+        "input": {
+            "catalog_path": str(tmp_path),
+            "catalog_pattern": "*.parq",
+            "ra_col": "ra",
+            "dec_col": "dec",
+            "selected_bands": [],
+        },
+        "output": {},
+    }
+
+    monkeypatch.setattr("science_catalogs.catalog.configure_dustmaps_path", lambda dust, client=None: None)
+    monkeypatch.setattr(
+        "science_catalogs.catalog.decide_suffix_and_flags",
+        lambda *args, **kwargs: ("_demo", False, False, False),
+    )
+    monkeypatch.setattr("science_catalogs.catalog.reorder_and_rechunk", lambda ddf, output_cfg: ddf)
+    monkeypatch.setattr(
+        "science_catalogs.catalog._build_file_processed_meta",
+        lambda *args, **kwargs: pd.DataFrame(
+            {
+                "ra": pd.Series(dtype="float64"),
+                "dec": pd.Series(dtype="float64"),
+                "tract": pd.Series(dtype="int64"),
+                "patch": pd.Series(dtype="int64"),
+            }
+        ),
+    )
+
+    def fake_process_file_df(
+        path,
+        cfg_path,
+        will_mag,
+        will_dered_flux,
+        will_dered_mag,
+        output_columns=None,
+    ):
+        df = pd.DataFrame(
+            {
+                "tract": [1],
+                "patch": [2],
+                "ra": [10.0],
+                "dec": [-20.0],
+            }
+        )
+        if output_columns is not None:
+            df = df.loc[:, list(output_columns)]
+        return df
+
+    monkeypatch.setattr("science_catalogs.catalog.process_file_df", fake_process_file_df)
+
+    prepared = prepare_catalog("unused.yml", config=cfg)
+    result = prepared.ddf.compute()
+
+    assert list(result.columns) == ["ra", "dec", "tract", "patch"]
     assert len(result) == 2
 
 

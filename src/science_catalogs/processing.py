@@ -259,6 +259,7 @@ def process_file_df(
     will_mag: bool,
     will_dered_flux: bool,
     will_dered_mag: bool,
+    output_columns=None,
 ):
     """Read, filter, transform, and return a single catalog file as a dataframe."""
     cfgw = _load_processing_config(cfg_path)
@@ -272,6 +273,7 @@ def process_file_df(
         will_dered_flux=will_dered_flux,
         will_dered_mag=will_dered_mag,
         source_name=path,
+        output_columns=output_columns,
     )
 
 
