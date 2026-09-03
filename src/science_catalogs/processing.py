@@ -41,6 +41,7 @@ def process_dataframe(
     will_dered_flux: bool,
     will_dered_mag: bool,
     source_name: str = "<dataframe>",
+    output_columns=None,
 ):
     """Filter and transform a dataframe according to the catalog configuration."""
     df = df.copy()
@@ -245,6 +246,9 @@ def process_dataframe(
 
     if is_id_index:
         df = df.reset_index()
+
+    if output_columns is not None:
+        df = df.loc[:, list(output_columns)]
 
     return df
 

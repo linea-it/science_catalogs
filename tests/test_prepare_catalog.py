@@ -176,3 +176,61 @@ def test_prepare_catalog_reads_hats_input(monkeypatch, tmp_path):
     assert "clear_divisions" not in calls["map_partitions_kwargs"]
     assert list(result.columns) == ["object_id", "ra", "dec", "mag_g", "magerr_g"]
     assert len(result) == 2
+
+
+def test_prepare_catalog_aligns_hats_partition_columns_to_meta(monkeypatch, tmp_path):
+    """Normalize HATS partition column order to the metadata order expected by Dask."""
+    hats_path = tmp_path / "demo_hats_catalog"
+    hats_path.mkdir()
+
+    cfg = {
+        "input": {
+            "catalog_path": str(hats_path),
+            "ra_col": "ra",
+            "dec_col": "dec",
+            "selected_bands": [],
+        },
+        "output": {},
+    }
+
+    source_df = pd.DataFrame(
+        {
+            "tract": [1, 2],
+            "patch": [3, 4],
+            "ra": [10.0, 11.0],
+            "dec": [-20.0, -21.0],
+        }
+    )
+    actual_ddf = dd.from_pandas(source_df, npartitions=2)
+    meta_ddf = dd.from_pandas(source_df[["ra", "dec", "tract", "patch"]], npartitions=2)
+
+    class _FakeCatalog:
+        def __init__(self, ddf, meta_source=None):
+            self._ddf = ddf
+            self._meta_source = meta_source if meta_source is not None else ddf
+
+        def to_dask_dataframe(self):
+            return self._meta_source
+
+        def map_partitions(self, func, *args, **kwargs):
+            meta = kwargs.pop("meta")
+            mapped = self._ddf.map_partitions(func, *args, meta=meta, **kwargs)
+            return _FakeCatalog(mapped)
+
+    monkeypatch.setattr("science_catalogs.catalog.configure_dustmaps_path", lambda dust, client=None: None)
+    monkeypatch.setattr(
+        "science_catalogs.catalog.decide_suffix_and_flags",
+        lambda *args, **kwargs: ("_demo", False, False, False),
+    )
+    monkeypatch.setattr("science_catalogs.catalog._is_hats_catalog_path", lambda path: True)
+    monkeypatch.setattr("science_catalogs.catalog.reorder_and_rechunk", lambda ddf, output_cfg: ddf)
+    monkeypatch.setattr(
+        "science_catalogs.catalog.open_lsdb_catalog",
+        lambda *args, **kwargs: _FakeCatalog(actual_ddf, meta_ddf),
+    )
+
+    prepared = prepare_catalog("unused.yml", config=cfg)
+    result = prepared.ddf.compute()
+
+    assert list(result.columns) == ["ra", "dec", "tract", "patch"]
+    assert result["tract"].tolist() == [1, 2]
