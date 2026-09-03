@@ -47,9 +47,9 @@ def _is_hats_catalog_path(path: Path) -> bool:
     if not path.is_dir():
         return False
 
-    from hats.io.validation import is_valid_catalog
+    from hats.io.validation import is_valid_catalog, is_valid_collection
 
-    return bool(is_valid_catalog(path))
+    return bool(is_valid_collection(path) or is_valid_catalog(path))
 
 
 def _glob_input_files(base_path: Path, pattern: str) -> list[str]:

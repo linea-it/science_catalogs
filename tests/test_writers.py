@@ -23,7 +23,7 @@ def test_write_hats_catalog_marks_margin_as_default(monkeypatch, tmp_path):
             captured["margin"] = kwargs
             return self
 
-    fake_validation = types.SimpleNamespace(is_valid_catalog=lambda path: False)
+    fake_validation = types.SimpleNamespace(is_valid_collection=lambda path: False)
     fake_readers = types.SimpleNamespace(
         CsvReader=lambda: "csv_reader",
         ParquetPyarrowReader=lambda: "parquet_reader",
@@ -52,3 +52,30 @@ def test_write_hats_catalog_marks_margin_as_default(monkeypatch, tmp_path):
 
     assert captured["margin"]["margin_threshold"] == 5.0
     assert captured["margin"]["is_default"] is True
+
+
+def test_write_hats_catalog_reuses_existing_collection(monkeypatch, tmp_path):
+    """Detect existing HATS collections without invoking staging or import."""
+    monkeypatch.setitem(
+        sys.modules,
+        "hats.io.validation",
+        types.SimpleNamespace(is_valid_collection=lambda path: True),
+    )
+
+    def fail_write_partitions(*args, **kwargs):
+        raise AssertionError("write_partitions should not run for an existing collection")
+
+    monkeypatch.setattr(writers, "write_partitions", fail_write_partitions)
+
+    result = writers.write_hats_catalog(
+        pd.DataFrame({"ra": [1.0], "dec": [2.0]}),
+        {"save_as": "hats", "hats_artifact_name": "demo"},
+        {"margin_threshold": 5.0},
+        str(tmp_path),
+        "_demo",
+        "ra",
+        "dec",
+        client="fake_client",
+    )
+
+    assert result == (str(tmp_path / "demo"),)

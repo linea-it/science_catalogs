@@ -35,7 +35,7 @@ def test_get_slurm_executor_disables_dashboard_by_default(monkeypatch):
     cluster = get_executor({"executor": "slurm", "slurm": {"dask_scale_number": 3}})
 
     assert isinstance(cluster, _FakeSlurmCluster)
-    assert captured["dashboard_address"] is None
+    assert captured["scheduler_options"]["dashboard_address"] is None
     assert captured["scale_jobs"] == 3
 
 
@@ -54,4 +54,4 @@ def test_get_slurm_executor_keeps_explicit_dashboard_address(monkeypatch):
 
     get_executor({"executor": "slurm", "slurm": {"dashboard_address": ":8787"}})
 
-    assert captured["dashboard_address"] == ":8787"
+    assert captured["scheduler_options"]["dashboard_address"] == ":8787"

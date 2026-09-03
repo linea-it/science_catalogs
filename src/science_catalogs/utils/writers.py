@@ -114,12 +114,9 @@ def write_hats_catalog(
         raise ValueError("HATS output requires both ra_col and dec_col")
 
     try:
-        from hats.io.validation import is_valid_catalog
-        from hats_import.catalog.file_readers import CsvReader, ParquetPyarrowReader
-        from hats_import.collection.arguments import CollectionArguments
-        from hats_import.collection.run_import import run
+        from hats.io.validation import is_valid_collection
     except Exception as exc:  # pragma: no cover
-        raise RuntimeError("hats-import not available in the environment") from exc
+        raise RuntimeError("hats not available in the environment") from exc
 
     source_format = output_cfg.get("hats_source_save_as", "parquet") or "parquet"
     artifact_name = output_cfg.get("hats_artifact_name") or f"{suffix}_collection"
@@ -131,8 +128,15 @@ def write_hats_catalog(
     output_path.mkdir(parents=True, exist_ok=True)
     artifact_path = output_path / artifact_name
 
-    if not force_recreate and is_valid_catalog(artifact_path):
+    if not force_recreate and is_valid_collection(artifact_path):
         return (str(artifact_path),)
+
+    try:
+        from hats_import.catalog.file_readers import CsvReader, ParquetPyarrowReader
+        from hats_import.collection.arguments import CollectionArguments
+        from hats_import.collection.run_import import run
+    except Exception as exc:  # pragma: no cover
+        raise RuntimeError("hats-import not available in the environment") from exc
 
     if force_recreate and artifact_path.exists():
         if artifact_path.is_dir():
