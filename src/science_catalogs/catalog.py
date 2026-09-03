@@ -147,7 +147,7 @@ def prepare_catalog(
         ddf = dd.from_delayed(delayed_dfs)
     else:
         input_files = [input_source["catalog_path"]]
-        selected_columns = list(inputs.get("user_selected_cols", []) or []) or None
+        selected_columns = list(inputs.get("user_selected_cols", []) or []) or "all"
         hats_catalog = open_lsdb_catalog(
             input_source["catalog_path"],
             client=client,

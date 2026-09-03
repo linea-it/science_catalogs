@@ -203,6 +203,7 @@ def test_prepare_catalog_aligns_hats_partition_columns_to_meta(monkeypatch, tmp_
     )
     actual_ddf = dd.from_pandas(source_df, npartitions=2)
     meta_ddf = dd.from_pandas(source_df[["ra", "dec", "tract", "patch"]], npartitions=2)
+    calls = {}
 
     class _FakeCatalog:
         def __init__(self, ddf, meta_source=None):
@@ -224,13 +225,16 @@ def test_prepare_catalog_aligns_hats_partition_columns_to_meta(monkeypatch, tmp_
     )
     monkeypatch.setattr("science_catalogs.catalog._is_hats_catalog_path", lambda path: True)
     monkeypatch.setattr("science_catalogs.catalog.reorder_and_rechunk", lambda ddf, output_cfg: ddf)
-    monkeypatch.setattr(
-        "science_catalogs.catalog.open_lsdb_catalog",
-        lambda *args, **kwargs: _FakeCatalog(actual_ddf, meta_ddf),
-    )
+
+    def fake_open_lsdb_catalog(*args, **kwargs):
+        calls["columns"] = kwargs.get("columns")
+        return _FakeCatalog(actual_ddf, meta_ddf)
+
+    monkeypatch.setattr("science_catalogs.catalog.open_lsdb_catalog", fake_open_lsdb_catalog)
 
     prepared = prepare_catalog("unused.yml", config=cfg)
     result = prepared.ddf.compute()
 
+    assert calls["columns"] == "all"
     assert list(result.columns) == ["ra", "dec", "tract", "patch"]
     assert result["tract"].tolist() == [1, 2]
