@@ -14,12 +14,14 @@ def get_executor(executor_cfg: dict[str, Any]):
 
     if name == "local":
         args = executor_cfg.get("local", {})
+        args.setdefault("dashboard_address", None)
         logger.info("Creating LocalCluster with %s", args)
         cluster = LocalCluster(**args)
         return cluster
 
     if name == "slurm":
         args = executor_cfg.get("slurm", {})
+        args.setdefault("dashboard_address", None)
         job_extra_directives = args.get("job_extra_directives", []) or []
 
         cluster = SLURMCluster(
@@ -29,6 +31,7 @@ def get_executor(executor_cfg: dict[str, Any]):
             processes=args.get("processes"),
             memory=args.get("memory"),
             walltime=args.get("walltime"),
+            dashboard_address=args.get("dashboard_address"),
             job_extra_directives=job_extra_directives,
         )
         scale = int(args.get("dask_scale_number", 1) or 1)
