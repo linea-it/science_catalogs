@@ -1,7 +1,9 @@
 """Tests for catalog output writers."""
 
+import logging
 import sys
 import types
+import warnings
 
 import pandas as pd
 from science_catalogs.utils import writers
@@ -79,3 +81,22 @@ def test_write_hats_catalog_reuses_existing_collection(monkeypatch, tmp_path):
     )
 
     assert result == (str(tmp_path / "demo"),)
+
+
+def test_suppress_hats_collection_validation_warning(caplog):
+    """Suppress only the noisy HATS finalization messages."""
+    with caplog.at_level(logging.WARNING):
+        with writers._suppress_hats_collection_validation_warning():
+            logging.warning("Looking for catalog - found collection.")
+            logging.warning("another warning")
+            with warnings.catch_warnings(record=True) as captured_warnings:
+                warnings.simplefilter("always", append=True)
+                warnings.warn(
+                    "Computing partitions from catalog parquet files. This may be slow.",
+                    UserWarning,
+                )
+                warnings.warn("another user warning", UserWarning)
+
+    assert "Looking for catalog - found collection." not in caplog.text
+    assert "another warning" in caplog.text
+    assert [str(warning.message) for warning in captured_warnings] == ["another user warning"]

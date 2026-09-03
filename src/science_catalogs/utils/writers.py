@@ -1,11 +1,13 @@
 """Output helpers (file naming and writing)."""
 
 import hashlib
+import logging
 import os
 import re
 import shutil
 import tempfile
 import warnings
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +17,31 @@ from dask import dataframe as dd
 from dask import delayed
 
 _fname_safe_re = re.compile(r"[^A-Za-z0-9._-]+")
+_HATS_COLLECTION_VALIDATION_MESSAGE = "Looking for catalog - found collection."
+_HATS_PARTITION_INFO_WARNING = "Computing partitions from catalog parquet files. This may be slow."
+
+
+class _SuppressHatsCollectionValidationWarning(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.getMessage() != _HATS_COLLECTION_VALIDATION_MESSAGE
+
+
+@contextmanager
+def _suppress_hats_collection_validation_warning():
+    """Suppress noisy HATS messages emitted while finalizing collections."""
+    root_logger = logging.getLogger()
+    log_filter = _SuppressHatsCollectionValidationWarning()
+    root_logger.addFilter(log_filter)
+    try:
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=re.escape(_HATS_PARTITION_INFO_WARNING),
+                category=UserWarning,
+            )
+            yield
+    finally:
+        root_logger.removeFilter(log_filter)
 
 
 def _sanitize_token(token: str) -> str:
@@ -188,7 +215,8 @@ def write_hats_catalog(
             hats_client = created_local_client
 
         try:
-            run(args, hats_client)
+            with _suppress_hats_collection_validation_warning():
+                run(args, hats_client)
         finally:
             if created_local_client is not None:
                 created_local_client.close()
