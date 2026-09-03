@@ -171,6 +171,7 @@ def write_hats_catalog(
             .add_margin(
                 output_artifact_name=f"margin_{str(margin_threshold).rstrip('0').rstrip('.')}arcs",
                 margin_threshold=margin_threshold,
+                is_default=True,
             )
         )
 
