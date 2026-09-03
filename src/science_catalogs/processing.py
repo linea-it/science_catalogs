@@ -28,6 +28,11 @@ def _load_processing_config(cfg_path: str) -> dict:
         return yaml.safe_load(_file) or {}
 
 
+def _series_to_float_numpy(series):
+    """Convert pandas/Arrow-backed series data to a plain float numpy array."""
+    return series.astype(float, copy=False).to_numpy()
+
+
 def process_dataframe(
     df,
     cfg: dict,
@@ -98,21 +103,23 @@ def process_dataframe(
     needs_ebv = bool(will_dered_flux or will_dered_mag)
     if needs_ebv:
         dq = get_dust_query(dust_cfg)
+        ra_values = _series_to_float_numpy(df[ra_col])
+        dec_values = _series_to_float_numpy(df[dec_col])
         dist_pc = None
         if dust_cfg.get("use_dustmap") in {"bayestar", "marshall", "stilism"}:
             if dust_cfg.get("distance_col_pc"):
-                dist_pc = df[dust_cfg["distance_col_pc"]].values.astype(float)
+                dist_pc = _series_to_float_numpy(df[dust_cfg["distance_col_pc"]])
             elif dust_cfg.get("distance_fixed_pc") is not None:
                 dist_pc = np.full(len(df), float(dust_cfg["distance_fixed_pc"]), dtype=float)
             else:
                 raise ValueError("3D dustmap requires distance_col_pc or distance_fixed_pc")
             coords = SkyCoord(
-                ra=df[ra_col].values * u.deg,
-                dec=df[dec_col].values * u.deg,
+                ra=ra_values * u.deg,
+                dec=dec_values * u.deg,
                 distance=dist_pc * u.pc,
             )
         else:
-            coords = SkyCoord(ra=df[ra_col].values * u.deg, dec=df[dec_col].values * u.deg)
+            coords = SkyCoord(ra=ra_values * u.deg, dec=dec_values * u.deg)
         df["E_BV"] = dq(coords)
 
     inv = invalid

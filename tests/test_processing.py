@@ -1,5 +1,6 @@
 """Tests for per-file catalog processing."""
 
+import numpy as np
 import pandas as pd
 import yaml
 from science_catalogs.processing import process_dataframe, process_file_df
@@ -98,3 +99,58 @@ def test_process_dataframe_matches_file_wrapper(tmp_path):
     )
 
     assert from_dataframe.equals(from_file)
+
+
+def test_process_dataframe_handles_arrow_backed_coordinates_for_dust(monkeypatch):
+    """Convert Arrow-backed coordinate columns before building SkyCoord."""
+    df = pd.DataFrame(
+        {
+            "ra": [10.0, 11.0],
+            "dec": [-20.0, -21.0],
+            "flux_g": [100.0, 120.0],
+            "fluxerr_g": [1.0, 1.2],
+        },
+        dtype="float64[pyarrow]",
+    )
+    cfg = {
+        "input": {
+            "user_selected_cols": ["ra", "dec", "flux_g", "fluxerr_g"],
+            "input_col_type": "flux",
+            "compute_magnitude": False,
+            "compute_dereddening": True,
+            "col_pattern": "flux_BAND",
+            "err_pattern": "fluxerr_BAND",
+            "selected_bands": ["g"],
+            "ra_col": "ra",
+            "dec_col": "dec",
+            "band_case": "lower_case",
+            "keep_input_columns_after_filters_or_transformations": True,
+        },
+        "output": {
+            "col_final_pattern": "flux_dered_BAND",
+            "err_final_pattern": "fluxerr_dered_BAND",
+            "band_case": "lower_case",
+            "A_EBV": {"g": 3.0},
+        },
+        "dust": {
+            "use_dustmap": "sfd",
+        },
+    }
+
+    monkeypatch.setattr(
+        "science_catalogs.processing.get_dust_query",
+        lambda dust_cfg: (lambda coords: np.zeros(len(coords), dtype=float)),
+    )
+
+    result = process_dataframe(
+        df,
+        cfg,
+        will_mag=False,
+        will_dered_flux=True,
+        will_dered_mag=False,
+        source_name="arrow_df",
+    )
+
+    assert "flux_dered_g" in result.columns
+    assert "fluxerr_dered_g" in result.columns
+    assert result["flux_dered_g"].tolist() == [100.0, 120.0]
