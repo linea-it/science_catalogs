@@ -176,6 +176,7 @@ def test_example_config_outputs_match_expected_rows(config_path, monkeypatch):
         input_cfg,
         input_cfg.get("compute_magnitude", True),
         input_cfg.get("compute_dereddening", True),
+        config.get("dust", {}),
     )
     monkeypatch.setattr(processing, "get_dust_query", lambda dust_cfg: _ZeroDustQuery())
 

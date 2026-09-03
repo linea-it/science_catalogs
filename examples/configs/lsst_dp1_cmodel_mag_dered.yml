@@ -39,7 +39,6 @@ input:
   ra_col: coord_ra
   dec_col: coord_dec
   band_case: lower_case
-  use_dustmap: sfd
   filter:
     enabled: false
     column: null

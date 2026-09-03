@@ -26,7 +26,12 @@ def as_float_or_none(value):
     return float(value)
 
 
-def decide_suffix_and_flags(input_cfg: dict[str, Any], compute_mag: bool, compute_dered: bool):
+def decide_suffix_and_flags(
+    input_cfg: dict[str, Any],
+    compute_mag: bool,
+    compute_dered: bool,
+    dust_cfg: dict[str, Any] | None = None,
+):
     """Derive output suffix and transformation flags from the input config."""
     input_col_type = input_cfg.get("input_col_type", "flux")
     if input_col_type not in ALLOWED_INPUT_TYPES:
@@ -81,8 +86,9 @@ def decide_suffix_and_flags(input_cfg: dict[str, Any], compute_mag: bool, comput
 
     out_kind = "mag" if (will_mag or str(input_col_type).startswith("mag")) else "flux"
     dust_tag = None
+    dust_cfg = dust_cfg or {}
     if will_dered_flux or will_dered_mag:
-        dust_tag = (input_cfg.get("use_dustmap") or "dered").strip().lower()
+        dust_tag = (dust_cfg.get("use_dustmap") or "dered").strip().lower()
     elif str(input_col_type).endswith("_dered"):
         dust_tag = "dered"
 

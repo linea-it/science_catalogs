@@ -90,7 +90,7 @@ def test_prepare_catalog_keeps_file_mode_behavior(monkeypatch, tmp_path):
 
     seen = []
 
-    monkeypatch.setattr("science_catalogs.catalog.configure_dustmaps_path", lambda dust: None)
+    monkeypatch.setattr("science_catalogs.catalog.configure_dustmaps_path", lambda dust, client=None: None)
     monkeypatch.setattr(
         "science_catalogs.catalog.decide_suffix_and_flags",
         lambda *args, **kwargs: ("_demo", False, False, False),
@@ -149,7 +149,7 @@ def test_prepare_catalog_reads_hats_input(monkeypatch, tmp_path):
             mapped = self._ddf.map_partitions(func, *args, meta=meta, **kwargs)
             return _FakeCatalog(mapped)
 
-    monkeypatch.setattr("science_catalogs.catalog.configure_dustmaps_path", lambda dust: None)
+    monkeypatch.setattr("science_catalogs.catalog.configure_dustmaps_path", lambda dust, client=None: None)
     monkeypatch.setattr(
         "science_catalogs.catalog.decide_suffix_and_flags",
         lambda *args, **kwargs: ("_demo", False, False, False),
