@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import shutil
+import sys
 import tempfile
 import warnings
 from contextlib import contextmanager
@@ -191,6 +192,7 @@ def write_hats_catalog(
                 output_artifact_name=artifact_name,
                 output_path=str(output_path),
                 progress_bar=True,
+                tqdm_kwargs={"file": sys.stdout},
             )
             .catalog(
                 output_artifact_name="catalog",

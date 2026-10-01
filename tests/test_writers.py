@@ -16,6 +16,7 @@ def test_write_hats_catalog_marks_margin_as_default(monkeypatch, tmp_path):
     class _FakeCollectionArguments:
         def __init__(self, **kwargs):
             captured["collection"] = kwargs
+            self.tqdm_kwargs = kwargs.get("tqdm_kwargs") or {}
 
         def catalog(self, **kwargs):
             captured["catalog"] = kwargs
@@ -54,6 +55,64 @@ def test_write_hats_catalog_marks_margin_as_default(monkeypatch, tmp_path):
 
     assert captured["margin"]["margin_threshold"] == 5.0
     assert captured["margin"]["is_default"] is True
+
+
+def test_write_hats_catalog_routes_tqdm_progress_to_stdout(monkeypatch, tmp_path, capsys):
+    """Route HATS import progress bars to stdout without moving warnings."""
+    captured = {}
+
+    class _FakeCollectionArguments:
+        def __init__(self, **kwargs):
+            captured["collection"] = kwargs
+            self.tqdm_kwargs = kwargs.get("tqdm_kwargs") or {}
+
+        def catalog(self, **kwargs):
+            captured["catalog"] = kwargs
+            return self
+
+        def add_margin(self, **kwargs):
+            captured["margin"] = kwargs
+            return self
+
+    def fake_run(args, client):
+        from tqdm import tqdm
+
+        for _ in tqdm(range(1), desc="Catalog: Planning", **args.tqdm_kwargs):
+            pass
+        sys.stderr.write("hats-import warning\n")
+
+    fake_validation = types.SimpleNamespace(is_valid_collection=lambda path: False)
+    fake_readers = types.SimpleNamespace(
+        CsvReader=lambda: "csv_reader",
+        ParquetPyarrowReader=lambda: "parquet_reader",
+    )
+    fake_arguments = types.SimpleNamespace(CollectionArguments=_FakeCollectionArguments)
+    fake_run_import = types.SimpleNamespace(run=fake_run)
+
+    monkeypatch.setitem(sys.modules, "hats.io.validation", fake_validation)
+    monkeypatch.setitem(sys.modules, "hats_import.catalog.file_readers", fake_readers)
+    monkeypatch.setitem(sys.modules, "hats_import.collection.arguments", fake_arguments)
+    monkeypatch.setitem(sys.modules, "hats_import.collection.run_import", fake_run_import)
+    monkeypatch.setattr(
+        writers, "write_partitions", lambda *args, **kwargs: [str(tmp_path / "part0.parquet")]
+    )
+
+    writers.write_hats_catalog(
+        pd.DataFrame({"ra": [1.0], "dec": [2.0]}),
+        {"save_as": "hats", "hats_artifact_name": "demo"},
+        {"margin_threshold": 5.0},
+        str(tmp_path),
+        "_demo",
+        "ra",
+        "dec",
+        client="fake_client",
+    )
+
+    captured_output = capsys.readouterr()
+    assert "Catalog: Planning" in captured_output.out
+    assert "Catalog: Planning" not in captured_output.err
+    assert "hats-import warning" in captured_output.err
+    assert captured["collection"]["tqdm_kwargs"]["file"] is sys.stdout
 
 
 def test_write_hats_catalog_reuses_existing_collection(monkeypatch, tmp_path):
