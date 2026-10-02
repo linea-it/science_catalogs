@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import gc
 import glob
+import logging
+import re
+import warnings
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -23,6 +27,21 @@ from science_catalogs.utils.dust import configure_dustmaps_path
 from science_catalogs.utils.io_readers import detect_and_read
 from science_catalogs.utils.partitioning import reorder_and_rechunk
 from science_catalogs.utils.writers import write_hats_catalog, write_partitions
+
+logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _suppress_dask_large_graph_warning():
+    """Hide Dask's advisory large-graph warning while preserving all others."""
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=re.escape("Sending large graph of size"),
+            category=UserWarning,
+            module=r"distributed\.client",
+        )
+        yield
 
 
 @dataclass(slots=True)
@@ -353,25 +372,51 @@ def build_catalog(
     The returned value is the written parquet partition paths, or the HATS
     artifact directory when `output_format="hats"`.
     """
+    logger.info("[1/5] Loading configuration: %s", config_path)
     cfg = load_catalog_config(config_path)
-    cluster = get_executor(cfg.get("execution", {}))
+    execution_cfg = cfg.get("execution", {})
+    executor_name = execution_cfg.get("executor", "local")
+    if executor_name == "slurm":
+        worker_count = int(execution_cfg.get("slurm", {}).get("dask_scale_number", 1) or 1)
+        logger.info("[2/5] Starting Dask executor: SLURM (%d workers)", worker_count)
+    else:
+        logger.info("[2/5] Starting Dask executor: %s", executor_name)
+
+    cluster = get_executor(execution_cfg)
     client = Client(cluster)
     cluster_ref = client.cluster
     cluster_comm = getattr(cluster_ref, "comm", None)
 
     try:
+        logger.info("Waiting for Dask workers to become ready")
         if cluster_comm:
             wait(cluster_comm)
+        logger.info("Dask executor is ready")
         client.run(lambda: gc.collect())
 
-        prepared = prepare_catalog(config_path, config=cfg, client=client)
-        resolved_output_dir = _resolve_output_dir(prepared, output_dir)
-        written_paths = write_catalog(
-            prepared,
-            resolved_output_dir,
-            client=client,
-            output_format=output_format,
-        )
+        with _suppress_dask_large_graph_warning():
+            logger.info("[3/5] Preparing input catalog")
+            prepared = prepare_catalog(config_path, config=cfg, client=client)
+            logger.info(
+                "Prepared %d input files in %d partitions",
+                len(prepared.input_files),
+                prepared.ddf.npartitions,
+            )
+
+            resolved_output_dir = _resolve_output_dir(prepared, output_dir)
+            resolved_format = output_format or prepared.output_cfg.get("save_as", "parquet")
+            logger.info(
+                "[4/5] Writing %s output to: %s",
+                str(resolved_format).upper(),
+                resolved_output_dir,
+            )
+            written_paths = write_catalog(
+                prepared,
+                resolved_output_dir,
+                client=client,
+                output_format=output_format,
+            )
+        logger.info("[5/5] Catalog build completed successfully")
         return _normalize_written_path(tuple(written_paths))
     finally:
         client.close()

@@ -1,5 +1,6 @@
 """Tests for the build_catalog convenience flow."""
 
+import warnings
 from pathlib import Path
 
 from science_catalogs.catalog import build_catalog
@@ -28,6 +29,8 @@ class _Prepared:
     def __init__(self):
         self.suffix = "_demo"
         self.output_cfg = {"save_as": "parquet"}
+        self.input_files = ["input.parquet"]
+        self.ddf = type("FakeDdf", (), {"npartitions": 1})()
 
 
 def _patch_runtime(monkeypatch):
@@ -124,3 +127,34 @@ def test_build_catalog_writes_hats(monkeypatch):
     assert calls["prepare_client"] is not None
     assert calls["output_dir"] == "/tmp/out"
     assert calls["output_format"] == "hats"
+
+
+def test_build_catalog_suppresses_only_dask_large_graph_warning(monkeypatch):
+    """Suppress Dask's graph-size advisory without hiding unrelated warnings."""
+    _patch_runtime(monkeypatch)
+    prepared = _Prepared()
+
+    monkeypatch.setattr("science_catalogs.catalog.load_catalog_config", lambda path: {"execution": {}})
+    monkeypatch.setattr(
+        "science_catalogs.catalog.prepare_catalog",
+        lambda path, config=None, client=None: prepared,
+    )
+
+    def fake_write_catalog(prepared, output_dir, client=None, output_format=None):
+        warnings.warn_explicit(
+            "Sending large graph of size 56.44 MiB. This may cause some slowdown.",
+            UserWarning,
+            "distributed/client.py",
+            3374,
+            module="distributed.client",
+        )
+        warnings.warn("another warning", UserWarning)
+        return (f"{output_dir}/part0.parquet",)
+
+    monkeypatch.setattr("science_catalogs.catalog.write_catalog", fake_write_catalog)
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        build_catalog("config.yml", output_dir="/tmp/out")
+
+    assert [str(warning.message) for warning in captured] == ["another warning"]

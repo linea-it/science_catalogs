@@ -20,6 +20,7 @@ from dask import delayed
 _fname_safe_re = re.compile(r"[^A-Za-z0-9._-]+")
 _HATS_COLLECTION_VALIDATION_MESSAGE = "Looking for catalog - found collection."
 _HATS_PARTITION_INFO_WARNING = "Computing partitions from catalog parquet files. This may be slow."
+logger = logging.getLogger(__name__)
 
 
 class _SuppressHatsCollectionValidationWarning(logging.Filter):
@@ -121,7 +122,9 @@ def write_partitions(ddf_out: dd.DataFrame, output_cfg: dict[str, Any], data_dir
     tasks = [
         _write_part(part, data_dir, suffix, i, ext, col_for_name) for i, part in enumerate(delayed_parts)
     ]
+    logger.info("Writing %d %s partition(s)", len(tasks), ext)
     written_paths = dask.compute(*tasks)
+    logger.info("Finished writing %d partition(s)", len(written_paths))
     return written_paths
 
 
@@ -167,6 +170,7 @@ def write_hats_catalog(
     artifact_path = output_path / artifact_name
 
     if not force_recreate and is_valid_collection(artifact_path):
+        logger.info("Reusing existing HATS collection: %s", artifact_path)
         return (str(artifact_path),)
 
     try:
@@ -235,8 +239,10 @@ def write_hats_catalog(
             hats_client = created_local_client
 
         try:
+            logger.info("Importing staging files into HATS collection: %s", artifact_name)
             with _suppress_hats_collection_validation_warning():
                 run(args, hats_client)
+            logger.info("HATS collection created: %s", artifact_path)
         finally:
             if created_local_client is not None:
                 created_local_client.close()
