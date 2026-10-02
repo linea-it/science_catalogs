@@ -1,0 +1,132 @@
+"""Tests for multi-catalog batch configuration."""
+
+from pathlib import Path
+
+import pytest
+import yaml
+
+from science_catalogs.catalog import _resolve_input_source, load_build_plan
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_dp2_batch_contains_all_positional_non_solar_catalogs():
+    """Keep the DP2 HATS example aligned with the spatial QA catalog selection."""
+    plan = load_build_plan(str(REPO_ROOT / "examples/configs/lsst_dp2_to_hats.yml"))
+    configs = {spec.name: spec.config for spec in plan.catalogs}
+
+    assert plan.is_batch is True
+    assert list(configs) == [
+        "dia_object",
+        "dia_object_forced_source",
+        "dia_source",
+        "isolated_star_stellar_motions",
+        "object",
+        "object_forced_source",
+        "object_shear_all",
+        "source",
+        "visit_detector_table",
+    ]
+    assert {name: (cfg["input"]["ra_col"], cfg["input"]["dec_col"]) for name, cfg in configs.items()} == {
+        "dia_object": ("ra", "dec"),
+        "dia_object_forced_source": ("coord_ra", "coord_dec"),
+        "dia_source": ("ra", "dec"),
+        "isolated_star_stellar_motions": ("ra", "dec"),
+        "object": ("coord_ra", "coord_dec"),
+        "object_forced_source": ("coord_ra", "coord_dec"),
+        "object_shear_all": ("ra", "dec"),
+        "source": ("coord_ra", "coord_dec"),
+        "visit_detector_table": ("ra", "dec"),
+    }
+    assert configs["source"]["input"]["catalog_pattern"] == "**/*.parq"
+    assert configs["object"]["photometry"]["enabled"] is True
+    assert len(configs["object"]["photometry"]["measurements"]) == 2
+    assert all(cfg["photometry"] == {"enabled": False} for name, cfg in configs.items() if name != "object")
+    assert all(cfg["output"]["on_existing"] == "error" for cfg in configs.values())
+    assert all(cfg["collection"]["margin"]["threshold_arcsec"] == 5.0 for cfg in configs.values())
+
+
+def test_batch_defaults_are_deep_merged(tmp_path):
+    """Allow catalog sections to override nested defaults without losing sibling values."""
+    config_path = tmp_path / "batch.yml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "batch": {
+                    "defaults": {
+                        "metadata": {"release": "TEST"},
+                        "photometry": {"enabled": False},
+                        "output": {"save_as": "hats", "base_path": "/output"},
+                        "collection": {"margin": {"threshold_arcsec": 5.0}},
+                    },
+                    "catalogs": [
+                        {
+                            "name": "demo",
+                            "input": {"catalog_path": "/input", "ra_col": "ra", "dec_col": "dec"},
+                            "output": {"hats_artifact_name": "demo_collection"},
+                            "collection": {"catalog": {"artifact_name": "demo"}},
+                        }
+                    ],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_build_plan(str(config_path)).catalogs[0].config
+
+    assert config["output"]["base_path"] == "/output"
+    assert config["output"]["hats_artifact_name"] == "demo_collection"
+    assert config["collection"] == {
+        "margin": {"threshold_arcsec": 5.0},
+        "catalog": {"artifact_name": "demo"},
+    }
+
+
+@pytest.mark.parametrize("duplicate_field", ["name", "artifact"])
+def test_batch_rejects_duplicate_names_and_hats_artifacts(tmp_path, duplicate_field):
+    """Reject output collisions before starting a distributed executor."""
+    first_name = second_name = "same" if duplicate_field == "name" else "first"
+    if duplicate_field != "name":
+        second_name = "second"
+    first_artifact = second_artifact = "same_collection" if duplicate_field == "artifact" else "first"
+    if duplicate_field != "artifact":
+        second_artifact = "second"
+    config = {
+        "batch": {
+            "defaults": {"photometry": {"enabled": False}, "output": {"save_as": "hats"}},
+            "catalogs": [
+                {
+                    "name": first_name,
+                    "input": {"catalog_path": "/first"},
+                    "output": {"hats_artifact_name": first_artifact},
+                },
+                {
+                    "name": second_name,
+                    "input": {"catalog_path": "/second"},
+                    "output": {"hats_artifact_name": second_artifact},
+                },
+            ],
+        }
+    }
+    config_path = tmp_path / "batch.yml"
+    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Duplicate batch"):
+        load_build_plan(str(config_path))
+
+
+def test_recursive_catalog_pattern_finds_band_directories(tmp_path, monkeypatch):
+    """Resolve all band files beneath a catalog with recursive glob syntax."""
+    expected = []
+    for band in ("u", "g", "r"):
+        band_dir = tmp_path / band
+        band_dir.mkdir()
+        path = band_dir / f"source_{band}.parq"
+        path.write_text("placeholder", encoding="utf-8")
+        expected.append(str(path))
+    monkeypatch.setattr("science_catalogs.catalog._is_hats_catalog_path", lambda path: False)
+
+    resolved = _resolve_input_source({"catalog_path": str(tmp_path), "catalog_pattern": "**/*.parq"})
+
+    assert resolved == {"source": "files", "input_files": sorted(expected)}

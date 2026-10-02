@@ -57,6 +57,7 @@ _OUTPUT_KEYS = {
     "col_for_filename",
     "hats_source_save_as",
     "hats_artifact_name",
+    "on_existing",
     # Legacy output keys.
     "hats_margin_threshold",
     "col_final_pattern",
@@ -262,6 +263,8 @@ def validate_catalog_config(cfg: dict[str, Any]) -> None:
     _reject_unknown(output, _OUTPUT_KEYS, "output")
     if output.get("save_as", "parquet") not in {"parquet", "csv", "hdf5", "hats"}:
         raise ValueError("output.save_as must be 'parquet', 'csv', 'hdf5', or 'hats'")
+    if output.get("on_existing", "reuse") not in {"reuse", "error", "replace"}:
+        raise ValueError("output.on_existing must be 'reuse', 'error', or 'replace'")
     target_rows = output.get("target_rows_per_part")
     if target_rows not in (None, False) and (
         isinstance(target_rows, bool) or not isinstance(target_rows, int) or target_rows <= 0

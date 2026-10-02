@@ -95,3 +95,62 @@ aliases are ``input.catalog_folder`` to ``input.catalog_path``, ``input.which_re
 to ``metadata.release``, ``cluster`` to ``execution``, and the old flat invalid-handling
 keys to the nested value/error policy. New configurations should use only the canonical
 layout.
+
+Batch layout
+----------------------------------------------------------------------------------------
+
+A batch configuration runs catalogs sequentially on one shared Dask executor. Existing
+single-catalog YAML files keep the canonical layout above and require no changes.
+Defaults are recursively merged into each named catalog; catalog values take precedence.
+
+.. code-block:: yaml
+
+   batch:
+     on_existing: error
+     execution:
+       executor: local
+       local:
+         n_workers: 3
+         threads_per_worker: 2
+     defaults:
+       metadata:
+         release: LSST_DP2
+       photometry:
+         enabled: false
+       output:
+         base_path: ./output
+         save_as: hats
+       collection:
+         margin:
+           threshold_arcsec: 5.0
+     catalogs:
+       - name: object
+         input:
+           catalog_path: ./input/object
+           catalog_pattern: "*.parq"
+           ra_col: coord_ra
+           dec_col: coord_dec
+         output:
+           hats_artifact_name: object_collection
+         collection:
+           catalog:
+             artifact_name: object
+       - name: source
+         input:
+           catalog_path: ./input/source
+           catalog_pattern: "**/*.parq"
+           ra_col: coord_ra
+           dec_col: coord_dec
+         output:
+           hats_artifact_name: source_collection
+         collection:
+           catalog:
+             artifact_name: source
+
+``execution`` belongs to the batch because all entries share one cluster. HATS artifact
+names and catalog names must be unique. The ``on_existing`` policy is ``error`` by
+default for batches and may be set to ``reuse`` or ``replace``. Single-catalog configs
+retain the historical ``reuse`` default. Recursive patterns such as ``**/*.parq`` allow
+one logical catalog to include band directories while preserving the band column.
+Non-HATS batch outputs are placed in a subdirectory named after each catalog so that
+partition filenames from different entries cannot collide.

@@ -103,6 +103,12 @@ Run `science-catalogs --help` for the complete command synopsis. Configuration i
 validated before execution, so unknown keys and scientifically inconsistent
 photometric transformations fail before catalog materialization begins.
 
+A YAML file may also contain a `batch` section with shared `defaults` and a list
+of named `catalogs`. Batch entries run one at a time on the same Dask executor and
+the command reports the artifact produced for each catalog. See
+`docs/configuration.rst` and `examples/configs/lsst_dp2_to_hats.yml` for the full
+layout.
+
 ### Python API
 
 Prepare a catalog from a catalog-processing YAML configuration:

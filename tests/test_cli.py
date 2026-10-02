@@ -81,3 +81,23 @@ def test_cli_hats_output(monkeypatch, capsys, tmp_path):
     cli.main()
     out = capsys.readouterr().out
     assert f"Wrote artifact to {tmp_path}/demo_collection" in out
+
+
+def test_cli_batch_output(monkeypatch, capsys, tmp_path):
+    """Report each named artifact returned by a batch build."""
+    monkeypatch.setattr(
+        cli,
+        "build_catalog",
+        lambda config_path, output_dir, output_format=None: {
+            "object": f"{output_dir}/object_collection",
+            "source": f"{output_dir}/source_collection",
+        },
+    )
+    monkeypatch.setattr("sys.argv", ["science-catalogs", "batch.yml", str(tmp_path)])
+
+    cli.main()
+
+    out = capsys.readouterr().out
+    assert "Wrote 2 catalogs" in out
+    assert f"object: {tmp_path}/object_collection" in out
+    assert f"source: {tmp_path}/source_collection" in out

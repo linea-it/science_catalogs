@@ -77,7 +77,14 @@ def main():
         output_format=args.output_format,
     )
 
-    if isinstance(result, tuple):
+    if isinstance(result, dict):
+        print(f"Wrote {len(result)} catalogs")
+        for name, path in result.items():
+            if isinstance(path, tuple):
+                print(f"  {name}: {len(path)} partition files")
+            else:
+                print(f"  {name}: {path}")
+    elif isinstance(result, tuple):
         print(f"Wrote {len(result)} partition files")
     else:
         print(f"Wrote artifact to {result}")

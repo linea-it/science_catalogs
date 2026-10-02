@@ -1,73 +1,172 @@
 # Run example:
 # science-catalogs examples/configs/lsst_dp2_to_hats.yml
 
-metadata:
-  release: LSST_DP2
+batch:
+  # Fail instead of silently reusing an existing HATS collection.
+  on_existing: error
 
-input:
-  catalog_path: <path-to-data>/object
-  catalog_pattern: "*.parq"
-  ra_col: coord_ra
-  dec_col: coord_dec
+  execution:
+    executor: slurm
+    slurm:
+      interface: ib0
+      queue: cpu_pipelines
+      cores: 2
+      processes: 1
+      memory: 48GB
+      walltime: "12:00:00"
+      job_extra_directives:
+        - "--account=hpc-pipelines"
+      dask_scale_number: 15
 
-photometry:
-  bands: [u, g, r, i, z, y]
-  band_case: lower_case
-  keep_input_columns: true
-  magnitude:
-    system: AB
-    flux_unit: nJy
-  measurements:
-    - name: psf
+  defaults:
+    metadata:
+      release: LSST_DP2
+    photometry:
+      enabled: false
+    output:
+      base_path: <path-to-data>/secondary/catalogs
+      save_as: hats
+    collection:
+      margin:
+        threshold_arcsec: 5.0
+
+  catalogs:
+    - name: dia_object
       input:
-        type: flux
-        value_pattern: BAND_psfFlux
-        error_pattern: BAND_psfFluxErr
+        catalog_path: <path-to-data>/dia_object
+        catalog_pattern: "*.parq"
+        ra_col: ra
+        dec_col: dec
       output:
-        type: mag
-        value_pattern: BAND_psfMag
-        error_pattern: BAND_psfMagErr
-        dtype: float32
-    - name: cmodel
+        hats_artifact_name: dia_object_collection
+      collection:
+        catalog:
+          artifact_name: dia_object
+
+    - name: dia_object_forced_source
       input:
-        type: flux
-        value_pattern: BAND_cModelFlux
-        error_pattern: BAND_cModelFluxErr
+        catalog_path: <path-to-data>/dia_object_forced_source
+        catalog_pattern: "*.parq"
+        ra_col: coord_ra
+        dec_col: coord_dec
       output:
-        type: mag
-        value_pattern: BAND_cModelMag
-        error_pattern: BAND_cModelMagErr
-        dtype: float32
+        hats_artifact_name: dia_object_forced_source_collection
+      collection:
+        catalog:
+          artifact_name: dia_object_forced_source
 
-output:
-  base_path: <path-to-data>/secondary/catalogs
-  save_as: hats
-  hats_artifact_name: object_collection
+    - name: dia_source
+      input:
+        catalog_path: <path-to-data>/dia_source
+        catalog_pattern: "*.parq"
+        ra_col: ra
+        dec_col: dec
+      output:
+        hats_artifact_name: dia_source_collection
+      collection:
+        catalog:
+          artifact_name: dia_source
 
-execution:
-  executor: slurm
+    - name: isolated_star_stellar_motions
+      input:
+        catalog_path: <path-to-data>/isolated_star_stellar_motions
+        catalog_pattern: "*.parq"
+        ra_col: ra
+        dec_col: dec
+      output:
+        hats_artifact_name: isolated_star_stellar_motions_collection
+      collection:
+        catalog:
+          artifact_name: isolated_star_stellar_motions
 
-  #local:
-  #  n_workers: 3
-  #  threads_per_worker: 2
-  #  memory_limit: "4GB"
+    - name: object
+      input:
+        catalog_path: <path-to-data>/object
+        catalog_pattern: "*.parq"
+        ra_col: coord_ra
+        dec_col: coord_dec
+      photometry:
+        enabled: true
+        bands: [u, g, r, i, z, y]
+        band_case: lower_case
+        keep_input_columns: true
+        magnitude:
+          system: AB
+          flux_unit: nJy
+        measurements:
+          - name: psf
+            input:
+              type: flux
+              value_pattern: BAND_psfFlux
+              error_pattern: BAND_psfFluxErr
+            output:
+              type: mag
+              value_pattern: BAND_psfMag
+              error_pattern: BAND_psfMagErr
+              dtype: float32
+          - name: cmodel
+            input:
+              type: flux
+              value_pattern: BAND_cModelFlux
+              error_pattern: BAND_cModelFluxErr
+            output:
+              type: mag
+              value_pattern: BAND_cModelMag
+              error_pattern: BAND_cModelMagErr
+              dtype: float32
+      output:
+        hats_artifact_name: object_collection
+      collection:
+        catalog:
+          artifact_name: object_lc
+        indexes:
+          - column: objectId
+            drop_duplicates: false
 
-  slurm:
-    interface: ib0
-    queue: cpu_pipelines
-    cores: 2
-    processes: 1
-    memory: 48GB
-    walltime: "12:00:00"
-    job_extra_directives:
-      - "--account=hpc-pipelines"
-    dask_scale_number: 15
+    - name: object_forced_source
+      input:
+        catalog_path: <path-to-data>/object_forced_source
+        catalog_pattern: "*.parq"
+        ra_col: coord_ra
+        dec_col: coord_dec
+      output:
+        hats_artifact_name: object_forced_source_collection
+      collection:
+        catalog:
+          artifact_name: object_forced_source
 
-collection:
-  catalog:
-    artifact_name: object_lc
-  margin:
-    threshold_arcsec: 5.0
-  indexes:
-    - column: objectId
-      drop_duplicates: false
+    - name: object_shear_all
+      input:
+        catalog_path: <path-to-data>/object_shear_all
+        catalog_pattern: "*.parq"
+        ra_col: ra
+        dec_col: dec
+      output:
+        hats_artifact_name: object_shear_all_collection
+      collection:
+        catalog:
+          artifact_name: object_shear_all
+
+    - name: source
+      input:
+        catalog_path: <path-to-data>/source
+        catalog_pattern: "**/*.parq"
+        ra_col: coord_ra
+        dec_col: coord_dec
+      output:
+        hats_artifact_name: source_collection
+      collection:
+        catalog:
+          artifact_name: source
+
+    - name: visit_detector_table
+      input:
+        catalog_path: <path-to-data>/visit_detector_table
+        catalog_pattern: "*.parq"
+        ra_col: ra
+        dec_col: dec
+      output:
+        hats_artifact_name: visit_detector_table_collection
+      collection:
+        catalog:
+          artifact_name: visit_detector_table

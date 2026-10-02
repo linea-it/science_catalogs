@@ -217,6 +217,29 @@ def test_write_hats_catalog_reuses_existing_collection(monkeypatch, tmp_path):
     assert result == (str(tmp_path / "demo"),)
 
 
+def test_write_hats_catalog_can_reject_existing_collection(monkeypatch, tmp_path):
+    """Fail before staging when the configured HATS destination already exists."""
+    import pytest
+
+    monkeypatch.setitem(
+        sys.modules,
+        "hats.io.validation",
+        types.SimpleNamespace(is_valid_collection=lambda path: True),
+    )
+
+    with pytest.raises(FileExistsError, match="demo"):
+        writers.write_hats_catalog(
+            pd.DataFrame({"ra": [1.0], "dec": [2.0]}),
+            {"save_as": "hats", "hats_artifact_name": "demo", "on_existing": "error"},
+            {"margin_threshold": 5.0},
+            str(tmp_path),
+            "_demo",
+            "ra",
+            "dec",
+            client="fake_client",
+        )
+
+
 def test_suppress_hats_collection_validation_warning(caplog):
     """Suppress only the noisy HATS finalization messages."""
     with caplog.at_level(logging.WARNING):

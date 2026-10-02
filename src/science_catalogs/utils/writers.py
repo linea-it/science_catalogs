@@ -144,6 +144,10 @@ def write_hats_catalog(
     if not ra_col or not dec_col:
         raise ValueError("HATS output requires both ra_col and dec_col")
 
+    on_existing = "replace" if force_recreate else output_cfg.get("on_existing", "reuse")
+    if on_existing not in {"reuse", "error", "replace"}:
+        raise ValueError("output.on_existing must be 'reuse', 'error', or 'replace'")
+
     try:
         from hats.io.validation import is_valid_collection
     except Exception as exc:  # pragma: no cover
@@ -169,9 +173,20 @@ def write_hats_catalog(
     output_path.mkdir(parents=True, exist_ok=True)
     artifact_path = output_path / artifact_name
 
-    if not force_recreate and is_valid_collection(artifact_path):
-        logger.info("Reusing existing HATS collection: %s", artifact_path)
-        return (str(artifact_path),)
+    artifact_is_valid = is_valid_collection(artifact_path)
+    if artifact_is_valid:
+        if on_existing == "reuse":
+            logger.info("Reusing existing HATS collection: %s", artifact_path)
+            return (str(artifact_path),)
+        if on_existing == "error":
+            raise FileExistsError(f"HATS output already exists: {artifact_path}")
+    elif artifact_path.exists():
+        if on_existing == "error":
+            raise FileExistsError(f"HATS output already exists: {artifact_path}")
+        if on_existing == "reuse":
+            raise FileExistsError(
+                f"HATS output path exists but is not a valid collection and cannot be reused: {artifact_path}"
+            )
 
     try:
         from hats_import.catalog.file_readers import CsvReader, ParquetPyarrowReader
@@ -180,7 +195,7 @@ def write_hats_catalog(
     except Exception as exc:  # pragma: no cover
         raise RuntimeError("hats-import not available in the environment") from exc
 
-    if force_recreate and artifact_path.exists():
+    if on_existing == "replace" and artifact_path.exists():
         if artifact_path.is_dir():
             shutil.rmtree(artifact_path)
         else:

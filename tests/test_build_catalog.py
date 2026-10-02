@@ -3,7 +3,7 @@
 import warnings
 from pathlib import Path
 
-from science_catalogs.catalog import build_catalog
+from science_catalogs.catalog import CatalogBuildPlan, CatalogBuildSpec, build_catalog
 
 
 class _FakeCluster:
@@ -39,13 +39,23 @@ def _patch_runtime(monkeypatch):
     monkeypatch.setattr("science_catalogs.catalog.Client", _FakeClient)
 
 
+def _patch_single_plan(monkeypatch, config=None):
+    """Use a validated-looking single-catalog plan without reading a YAML file."""
+    cfg = config or {"execution": {}}
+    plan = CatalogBuildPlan(
+        catalogs=[CatalogBuildSpec(name=None, config=cfg)],
+        execution_cfg=cfg.get("execution", {}),
+    )
+    monkeypatch.setattr("science_catalogs.catalog.load_build_plan", lambda path: plan)
+
+
 def test_build_catalog_writes_parquet(monkeypatch):
     """Build parquet output when an explicit destination is provided."""
     _patch_runtime(monkeypatch)
     prepared = _Prepared()
     calls = {}
 
-    monkeypatch.setattr("science_catalogs.catalog.load_catalog_config", lambda path: {"execution": {}})
+    _patch_single_plan(monkeypatch)
 
     def fake_prepare_catalog(path, config=None, client=None):
         calls["prepare_client"] = client
@@ -74,7 +84,7 @@ def test_build_catalog_defaults_to_cwd_data(monkeypatch, tmp_path):
     prepared = _Prepared()
     captured = {}
 
-    monkeypatch.setattr("science_catalogs.catalog.load_catalog_config", lambda path: {"execution": {}})
+    _patch_single_plan(monkeypatch)
 
     def fake_prepare_catalog(path, config=None, client=None):
         captured["prepare_client"] = client
@@ -106,7 +116,7 @@ def test_build_catalog_writes_hats(monkeypatch):
     prepared.output_cfg = {"save_as": "hats"}
     calls = {}
 
-    monkeypatch.setattr("science_catalogs.catalog.load_catalog_config", lambda path: {"execution": {}})
+    _patch_single_plan(monkeypatch)
 
     def fake_prepare_catalog(path, config=None, client=None):
         calls["prepare_client"] = client
@@ -134,7 +144,7 @@ def test_build_catalog_suppresses_only_dask_large_graph_warning(monkeypatch):
     _patch_runtime(monkeypatch)
     prepared = _Prepared()
 
-    monkeypatch.setattr("science_catalogs.catalog.load_catalog_config", lambda path: {"execution": {}})
+    _patch_single_plan(monkeypatch)
     monkeypatch.setattr(
         "science_catalogs.catalog.prepare_catalog",
         lambda path, config=None, client=None: prepared,
@@ -158,3 +168,45 @@ def test_build_catalog_suppresses_only_dask_large_graph_warning(monkeypatch):
         build_catalog("config.yml", output_dir="/tmp/out")
 
     assert [str(warning.message) for warning in captured] == ["another warning"]
+
+
+def test_build_catalog_processes_batch_sequentially_on_one_cluster(monkeypatch):
+    """Reuse one executor while preparing and writing each named catalog in order."""
+    _patch_runtime(monkeypatch)
+    plan = CatalogBuildPlan(
+        catalogs=[
+            CatalogBuildSpec(name="first", config={"input": {"catalog_path": "first"}}),
+            CatalogBuildSpec(name="second", config={"input": {"catalog_path": "second"}}),
+        ],
+        execution_cfg={},
+        is_batch=True,
+    )
+    monkeypatch.setattr("science_catalogs.catalog.load_build_plan", lambda path: plan)
+    calls = []
+
+    def fake_prepare(path, config=None, client=None):
+        prepared = _Prepared()
+        prepared.catalog_name = config["input"]["catalog_path"]
+        calls.append(("prepare", prepared.catalog_name, client))
+        return prepared
+
+    def fake_write(prepared, output_dir, client=None, output_format=None):
+        calls.append(("write", prepared.catalog_name, client))
+        return (f"{output_dir}/{prepared.catalog_name}_collection",)
+
+    monkeypatch.setattr("science_catalogs.catalog.prepare_catalog", fake_prepare)
+    monkeypatch.setattr("science_catalogs.catalog.write_catalog", fake_write)
+
+    result = build_catalog("batch.yml", output_dir="/tmp/out")
+
+    assert result == {
+        "first": "/tmp/out/first/first_collection",
+        "second": "/tmp/out/second/second_collection",
+    }
+    assert [(kind, name) for kind, name, _ in calls] == [
+        ("prepare", "first"),
+        ("write", "first"),
+        ("prepare", "second"),
+        ("write", "second"),
+    ]
+    assert len({id(client) for _, _, client in calls}) == 1
