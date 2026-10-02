@@ -6,6 +6,7 @@ import types
 import warnings
 
 import pandas as pd
+
 from science_catalogs.utils import writers
 
 
@@ -24,6 +25,10 @@ def test_write_hats_catalog_marks_margin_as_default(monkeypatch, tmp_path):
 
         def add_margin(self, **kwargs):
             captured["margin"] = kwargs
+            return self
+
+        def add_index(self, **kwargs):
+            captured.setdefault("indexes", []).append(kwargs)
             return self
 
     fake_validation = types.SimpleNamespace(is_valid_collection=lambda path: False)
@@ -55,6 +60,76 @@ def test_write_hats_catalog_marks_margin_as_default(monkeypatch, tmp_path):
 
     assert captured["margin"]["margin_threshold"] == 5.0
     assert captured["margin"]["is_default"] is True
+
+
+def test_write_hats_catalog_adds_configured_indexes(monkeypatch, tmp_path):
+    """Create collection index catalogs from the canonical collection config."""
+    captured = {}
+
+    class _FakeCollectionArguments:
+        def __init__(self, **kwargs):
+            self.tqdm_kwargs = kwargs.get("tqdm_kwargs") or {}
+
+        def catalog(self, **kwargs):
+            captured["catalog"] = kwargs
+            return self
+
+        def add_margin(self, **kwargs):
+            return self
+
+        def add_index(self, **kwargs):
+            captured.setdefault("indexes", []).append(kwargs)
+            return self
+
+    monkeypatch.setitem(
+        sys.modules,
+        "hats.io.validation",
+        types.SimpleNamespace(is_valid_collection=lambda path: False),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hats_import.catalog.file_readers",
+        types.SimpleNamespace(CsvReader=lambda: "csv", ParquetPyarrowReader=lambda: "parquet"),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hats_import.collection.arguments",
+        types.SimpleNamespace(CollectionArguments=_FakeCollectionArguments),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hats_import.collection.run_import",
+        types.SimpleNamespace(run=lambda args, client: None),
+    )
+    monkeypatch.setattr(
+        writers, "write_partitions", lambda *args, **kwargs: [str(tmp_path / "part0.parquet")]
+    )
+
+    writers.write_hats_catalog(
+        pd.DataFrame({"objectId": [1], "ra": [1.0], "dec": [2.0]}),
+        {"save_as": "hats", "hats_artifact_name": "demo"},
+        {
+            "catalog": {"artifact_name": "object_lc"},
+            "margin": {"threshold_arcsec": 5.0},
+            "indexes": [{"column": "objectId", "drop_duplicates": False}],
+        },
+        str(tmp_path),
+        "_demo",
+        "ra",
+        "dec",
+        client="fake_client",
+    )
+
+    assert captured["catalog"]["output_artifact_name"] == "object_lc"
+    assert captured["indexes"] == [
+        {
+            "indexing_column": "objectId",
+            "drop_duplicates": False,
+            "include_healpix_29": True,
+            "include_order_pixel": True,
+            "include_radec": False,
+        }
+    ]
 
 
 def test_write_hats_catalog_routes_tqdm_progress_to_stdout(monkeypatch, tmp_path, capsys):

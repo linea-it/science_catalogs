@@ -14,7 +14,11 @@ from dask.distributed import Client, wait
 
 from science_catalogs.executor import get_executor
 from science_catalogs.processing import process_dataframe, process_file_df
-from science_catalogs.utils.config import decide_suffix_and_flags
+from science_catalogs.utils.config import (
+    decide_photometry_suffix,
+    decide_suffix_and_flags,
+    normalize_catalog_config,
+)
 from science_catalogs.utils.dust import configure_dustmaps_path
 from science_catalogs.utils.io_readers import detect_and_read
 from science_catalogs.utils.partitioning import reorder_and_rechunk
@@ -39,7 +43,7 @@ def load_catalog_config(config_path: str) -> dict[str, Any]:
     import yaml
 
     with open(config_path, "r", encoding="utf-8") as _file:
-        return yaml.safe_load(_file) or {}
+        return normalize_catalog_config(yaml.safe_load(_file) or {})
 
 
 def _is_hats_catalog_path(path: Path) -> bool:
@@ -138,7 +142,7 @@ def prepare_catalog(
     client=None,
 ) -> PreparedCatalog:
     """Build the lazy processed catalog from file inputs or an existing HATS catalog."""
-    cfg = config if config is not None else load_catalog_config(config_path)
+    cfg = normalize_catalog_config(config) if config is not None else load_catalog_config(config_path)
 
     inputs = cfg.get("input", {})
     dust = cfg.get("dust", {})
@@ -146,12 +150,16 @@ def prepare_catalog(
 
     configure_dustmaps_path(dust, client=client)
 
-    suffix, will_mag, will_dered_flux, will_dered_mag = decide_suffix_and_flags(
-        inputs,
-        inputs.get("compute_magnitude", True),
-        inputs.get("compute_dereddening", True),
-        dust,
-    )
+    if "photometry" in cfg:
+        suffix, flags = decide_photometry_suffix(cfg)
+        will_mag, will_dered_flux, will_dered_mag = flags
+    else:
+        suffix, will_mag, will_dered_flux, will_dered_mag = decide_suffix_and_flags(
+            inputs,
+            inputs.get("compute_magnitude", True),
+            inputs.get("compute_dereddening", True),
+            dust,
+        )
 
     input_source = _resolve_input_source(inputs)
 
@@ -167,7 +175,7 @@ def prepare_catalog(
         delayed_dfs = [
             delayed(process_file_df)(
                 p,
-                cfg_path=config_path,
+                cfg_path=cfg,
                 will_mag=will_mag,
                 will_dered_flux=will_dered_flux,
                 will_dered_mag=will_dered_mag,
@@ -346,7 +354,7 @@ def build_catalog(
     artifact directory when `output_format="hats"`.
     """
     cfg = load_catalog_config(config_path)
-    cluster = get_executor(cfg.get("cluster", {}))
+    cluster = get_executor(cfg.get("execution", {}))
     client = Client(cluster)
     cluster_ref = client.cluster
     cluster_comm = getattr(cluster_ref, "comm", None)

@@ -5,6 +5,7 @@ from pathlib import Path
 import dask.dataframe as dd
 import pandas as pd
 import pytest
+
 from science_catalogs.catalog import _resolve_input_source, prepare_catalog
 
 
@@ -312,3 +313,27 @@ def test_prepare_catalog_reads_all_hats_columns_by_default(monkeypatch, tmp_path
 
     assert calls["columns"] == "all"
     assert list(result.columns) == ["ra", "dec", "value"]
+
+
+def test_prepare_catalog_uses_programmatic_config_on_file_workers(tmp_path):
+    """Use one config for metadata inference and delayed file processing."""
+    input_path = tmp_path / "input.csv"
+    input_path.write_text("id,ra,dec\n1,10.0,-20.0\n", encoding="utf-8")
+    config_path = tmp_path / "different-on-disk.yml"
+    config_path.write_text("unexpected_root_key: true\n", encoding="utf-8")
+    cfg = {
+        "metadata": {"release": "TEST"},
+        "input": {
+            "catalog_path": str(input_path),
+            "user_selected_cols": ["id", "ra", "dec"],
+            "ra_col": "ra",
+            "dec_col": "dec",
+        },
+        "photometry": {"enabled": False},
+        "output": {},
+    }
+
+    prepared = prepare_catalog(str(config_path), config=cfg)
+    result = prepared.ddf.compute()
+
+    assert result.to_dict("records") == [{"id": 1, "ra": 10.0, "dec": -20.0}]

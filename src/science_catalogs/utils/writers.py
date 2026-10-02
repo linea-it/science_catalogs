@@ -148,9 +148,19 @@ def write_hats_catalog(
 
     source_format = output_cfg.get("hats_source_save_as", "parquet") or "parquet"
     artifact_name = output_cfg.get("hats_artifact_name") or f"{suffix}_collection"
+    catalog_artifact_name = collection_cfg.get("catalog", {}).get("artifact_name", "catalog")
+    margin_cfg = collection_cfg.get("margin", {})
     margin_threshold = output_cfg.get("hats_margin_threshold")
     if margin_threshold is None:
-        margin_threshold = collection_cfg.get("margin_threshold", 10.0)
+        margin_threshold = margin_cfg.get("threshold_arcsec", collection_cfg.get("margin_threshold", 10.0))
+    index_cfgs = collection_cfg.get("indexes", []) or []
+    if not isinstance(index_cfgs, list):
+        raise ValueError("collection.indexes must be a list")
+    for index_cfg in index_cfgs:
+        if not isinstance(index_cfg, dict) or not index_cfg.get("column"):
+            raise ValueError("Each collection.indexes entry requires a column")
+        if index_cfg["column"] not in ddf_out.columns:
+            raise ValueError(f"HATS index column not found: {index_cfg['column']}")
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -187,26 +197,34 @@ def write_hats_catalog(
         else:  # pragma: no cover
             raise ValueError("HATS output supports only parquet or csv as staging formats")
 
-        args = (
-            CollectionArguments(
-                output_artifact_name=artifact_name,
-                output_path=str(output_path),
-                progress_bar=True,
-                tqdm_kwargs={"file": sys.stdout},
-            )
-            .catalog(
-                output_artifact_name="catalog",
-                ra_column=ra_col,
-                dec_column=dec_col,
-                input_file_list=[Path(path) for path in written_paths],
-                file_reader=file_reader,
-            )
-            .add_margin(
-                output_artifact_name=f"margin_{str(margin_threshold).rstrip('0').rstrip('.')}arcs",
-                margin_threshold=margin_threshold,
-                is_default=True,
-            )
+        args = CollectionArguments(
+            output_artifact_name=artifact_name,
+            output_path=str(output_path),
+            progress_bar=True,
+            tqdm_kwargs={"file": sys.stdout},
+        ).catalog(
+            output_artifact_name=catalog_artifact_name,
+            ra_column=ra_col,
+            dec_column=dec_col,
+            input_file_list=[Path(path) for path in written_paths],
+            file_reader=file_reader,
         )
+        margin_kwargs = {"margin_threshold": margin_threshold, "is_default": True}
+        if margin_cfg.get("artifact_name"):
+            margin_kwargs["output_artifact_name"] = margin_cfg["artifact_name"]
+        args.add_margin(**margin_kwargs)
+
+        for index_cfg in index_cfgs:
+            index_kwargs = {
+                "indexing_column": index_cfg["column"],
+                "drop_duplicates": index_cfg.get("drop_duplicates", True),
+                "include_healpix_29": index_cfg.get("include_healpix_29", True),
+                "include_order_pixel": index_cfg.get("include_order_pixel", True),
+                "include_radec": index_cfg.get("include_radec", False),
+            }
+            if index_cfg.get("artifact_name"):
+                index_kwargs["output_artifact_name"] = index_cfg["artifact_name"]
+            args.add_index(**index_kwargs)
 
         created_local_client = None
         hats_client = client

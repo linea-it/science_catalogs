@@ -42,7 +42,7 @@ def test_build_catalog_writes_parquet(monkeypatch):
     prepared = _Prepared()
     calls = {}
 
-    monkeypatch.setattr("science_catalogs.catalog.load_catalog_config", lambda path: {"cluster": {}})
+    monkeypatch.setattr("science_catalogs.catalog.load_catalog_config", lambda path: {"execution": {}})
 
     def fake_prepare_catalog(path, config=None, client=None):
         calls["prepare_client"] = client
@@ -71,7 +71,7 @@ def test_build_catalog_defaults_to_cwd_data(monkeypatch, tmp_path):
     prepared = _Prepared()
     captured = {}
 
-    monkeypatch.setattr("science_catalogs.catalog.load_catalog_config", lambda path: {"cluster": {}})
+    monkeypatch.setattr("science_catalogs.catalog.load_catalog_config", lambda path: {"execution": {}})
 
     def fake_prepare_catalog(path, config=None, client=None):
         captured["prepare_client"] = client
@@ -103,7 +103,7 @@ def test_build_catalog_writes_hats(monkeypatch):
     prepared.output_cfg = {"save_as": "hats"}
     calls = {}
 
-    monkeypatch.setattr("science_catalogs.catalog.load_catalog_config", lambda path: {"cluster": {}})
+    monkeypatch.setattr("science_catalogs.catalog.load_catalog_config", lambda path: {"execution": {}})
 
     def fake_prepare_catalog(path, config=None, client=None):
         calls["prepare_client"] = client

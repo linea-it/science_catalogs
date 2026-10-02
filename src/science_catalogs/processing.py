@@ -4,7 +4,13 @@ import astropy.units as u
 import numpy as np
 from astropy.coordinates import SkyCoord
 
-from science_catalogs.utils.config import as_float_or_none
+from science_catalogs.utils.config import (
+    ab_magnitude_zero_point,
+    as_float_or_none,
+    normalize_catalog_config,
+    resolve_invalid_handling,
+    transformation_flags,
+)
 from science_catalogs.utils.dust import get_dust_query
 from science_catalogs.utils.io_readers import detect_and_read
 
@@ -18,6 +24,63 @@ def _keep_input_columns(input_cfg):
     if KEEP_INPUT_COLUMNS_KEY in input_cfg:
         return bool(input_cfg.get(KEEP_INPUT_COLUMNS_KEY))
     return bool(input_cfg.get(LEGACY_KEEP_INPUT_COLUMNS_KEY, False))
+
+
+def _photometry_groups(input_cfg, output_cfg, photometry_cfg, legacy_flags):
+    """Return configured photometry column groups, including the legacy single group."""
+    if photometry_cfg is not None:
+        if photometry_cfg.get("enabled", True) is False:
+            return []
+        bands = photometry_cfg.get("bands", [])
+        groups = []
+        for measurement in photometry_cfg.get("measurements", []):
+            input_measurement = measurement.get("input", {})
+            output_measurement = measurement.get("output", {})
+            flags = transformation_flags(input_measurement.get("type"), output_measurement.get("type"))
+            groups.append(
+                {
+                    "name": measurement.get("name"),
+                    "col_pattern": input_measurement.get("value_pattern"),
+                    "err_pattern": input_measurement.get("error_pattern"),
+                    "col_final_pattern": output_measurement.get("value_pattern"),
+                    "err_final_pattern": output_measurement.get("error_pattern"),
+                    "output_dtype": output_measurement.get("dtype"),
+                    "selected_bands": measurement.get("bands", bands),
+                    "will_mag": flags[0],
+                    "will_dered_flux": flags[1],
+                    "will_dered_mag": flags[2],
+                }
+            )
+        return groups
+
+    configured_groups = input_cfg.get("photometry")
+    if configured_groups is None:
+        return [
+            {
+                "col_pattern": input_cfg.get("col_pattern"),
+                "err_pattern": input_cfg.get("err_pattern"),
+                "col_final_pattern": output_cfg.get("col_final_pattern"),
+                "err_final_pattern": output_cfg.get("err_final_pattern"),
+                "selected_bands": input_cfg.get("selected_bands", []),
+                "will_mag": legacy_flags[0],
+                "will_dered_flux": legacy_flags[1],
+                "will_dered_mag": legacy_flags[2],
+            }
+        ]
+    if not isinstance(configured_groups, list) or not configured_groups:
+        raise ValueError("input.photometry must be a non-empty list")
+
+    groups = []
+    for group in configured_groups:
+        if not isinstance(group, dict):
+            raise ValueError("Each input.photometry entry must be a mapping")
+        resolved = dict(group)
+        resolved.setdefault("selected_bands", input_cfg.get("selected_bands", []))
+        resolved.setdefault("will_mag", legacy_flags[0])
+        resolved.setdefault("will_dered_flux", legacy_flags[1])
+        resolved.setdefault("will_dered_mag", legacy_flags[2])
+        groups.append(resolved)
+    return groups
 
 
 def _load_processing_config(cfg_path: str) -> dict:
@@ -48,18 +111,21 @@ def process_dataframe(
     input_cfg = cfg.get("input", {})
     dust_cfg = cfg.get("dust", {})
     output_cfg = cfg.get("output", {})
-    invalid = cfg.get("invalid_handling", {})
+    photometry_cfg = cfg.get("photometry")
+    if photometry_cfg is not None:
+        invalid = resolve_invalid_handling(photometry_cfg.get("invalid_handling", {}))
+        magnitude_cfg = photometry_cfg.get("magnitude")
+        mag_offset = ab_magnitude_zero_point(magnitude_cfg) if magnitude_cfg is not None else None
+        a_ebv = dict(photometry_cfg.get("dereddening", {}).get("extinction_coefficients", {}))
+    else:
+        invalid = resolve_invalid_handling(cfg.get("invalid_handling", {}))
+        mag_offset = as_float_or_none(output_cfg.get("mag_offset"))
+        a_ebv = dict(output_cfg.get("A_EBV", {}))
 
     is_id_index = bool(input_cfg.get("is_id_in_index", False))
 
-    col_pattern = input_cfg.get("col_pattern")
-    err_pattern = input_cfg.get("err_pattern")
-    selected_bands = list(input_cfg.get("selected_bands", []))
     ra_col = input_cfg.get("ra_col")
     dec_col = input_cfg.get("dec_col")
-
-    mag_offset = as_float_or_none(output_cfg.get("mag_offset"))
-    a_ebv = dict(output_cfg.get("A_EBV", {}))
 
     filt = input_cfg.get("filter", {})
     if filt.get("enabled"):
@@ -101,7 +167,13 @@ def process_dataframe(
             mask = np.isfinite(df[cut_col].values) & (df[cut_col].values >= flux_lim)
         df = df[mask]
 
-    needs_ebv = bool(will_dered_flux or will_dered_mag)
+    groups = _photometry_groups(
+        input_cfg,
+        output_cfg,
+        photometry_cfg,
+        (will_mag, will_dered_flux, will_dered_mag),
+    )
+    needs_ebv = any(group["will_dered_flux"] or group["will_dered_mag"] for group in groups)
     if needs_ebv:
         dq = get_dust_query(dust_cfg)
         ra_values = _series_to_float_numpy(df[ra_col])
@@ -171,70 +243,100 @@ def process_dataframe(
             return np.where(mask, np.nan, arr)
         return np.where(mask, replacement_value, arr)
 
-    keep_inputs = _keep_input_columns(input_cfg)
-
-    band_case = input_cfg.get("band_case") or output_cfg.get("band_case", "lower_case")
-    col_final_pattern = output_cfg.get("col_final_pattern")
-    err_final_pattern = output_cfg.get("err_final_pattern")
-
+    if photometry_cfg is not None:
+        keep_inputs = bool(photometry_cfg.get("keep_input_columns", False))
+        band_case = photometry_cfg.get("band_case", "lower_case")
+    else:
+        keep_inputs = _keep_input_columns(input_cfg)
+        band_case = input_cfg.get("band_case") or output_cfg.get("band_case", "lower_case")
     input_cols_to_drop: list[str] = []
     final_output_cols: set[str] = set()
 
-    for band in selected_bands:
-        col_in = col_pattern.replace("BAND", band)
-        err_in = err_pattern.replace("BAND", band)
+    for group in groups:
+        col_pattern = group.get("col_pattern")
+        err_pattern = group.get("err_pattern")
+        col_final_pattern = group.get("col_final_pattern")
+        err_final_pattern = group.get("err_final_pattern")
+        selected_bands = list(group.get("selected_bands", []))
+        if selected_bands and not all(
+            isinstance(pattern, str)
+            for pattern in (col_pattern, err_pattern, col_final_pattern, err_final_pattern)
+        ):
+            raise ValueError(
+                "Each photometry group with selected bands requires col_pattern, err_pattern, "
+                "col_final_pattern, and err_final_pattern"
+            )
 
-        band_fmt = band.lower() if band_case == "lower_case" else band.upper()
-        final_col = col_final_pattern.replace("BAND", band_fmt)
-        final_err_col = err_final_pattern.replace("BAND", band_fmt)
-        final_output_cols.update([final_col, final_err_col])
+        for band in selected_bands:
+            col_in = col_pattern.replace("BAND", band)
+            err_in = err_pattern.replace("BAND", band)
 
-        if col_in not in df.columns or err_in not in df.columns:
-            raise ValueError(f"Missing column(s) {[col_in, err_in]} in source {source_name}")
+            if band_case == "lower_case":
+                band_fmt = band.lower()
+            elif band_case == "upper_case":
+                band_fmt = band.upper()
+            else:
+                band_fmt = band
+            final_col = col_final_pattern.replace("BAND", band_fmt)
+            final_err_col = err_final_pattern.replace("BAND", band_fmt)
+            final_output_cols.update([final_col, final_err_col])
 
-        values = df[col_in].astype(float, copy=False).values
-        errors = df[err_in].astype(float, copy=False).values
+            if col_in not in df.columns or err_in not in df.columns:
+                raise ValueError(f"Missing column(s) {[col_in, err_in]} in source {source_name}")
 
-        if will_dered_flux:
-            a_lambda = df["E_BV"].values * a_ebv[band]
-            factor = np.power(10.0, 0.4 * a_lambda)
-            values = values * factor
-            errors = errors * factor
+            values = df[col_in].astype(float, copy=False).values
+            errors = df[err_in].astype(float, copy=False).values
 
-        if will_mag:
-            f_curr = values
-            with np.errstate(divide="ignore", invalid="ignore"):
-                values = -2.5 * np.log10(f_curr) + float(mag_offset)
-                errors = errors / (f_curr * MAG_CONV)
+            if group["will_dered_flux"]:
+                a_lambda = df["E_BV"].values * a_ebv[band]
+                factor = np.power(10.0, 0.4 * a_lambda)
+                values = values * factor
+                errors = errors * factor
 
-        if will_dered_mag:
-            a_lambda = df["E_BV"].values * a_ebv[band]
-            values = values - a_lambda
+            if group["will_mag"]:
+                flux = values
+                flux_error = errors
+                valid_flux = np.isfinite(flux) & (flux > 0.0)
+                valid_flux_error = np.isfinite(flux_error) & (flux_error >= 0.0)
+                values = np.full(flux.shape, np.nan, dtype=float)
+                errors = np.full(flux_error.shape, np.nan, dtype=float)
+                values[valid_flux] = -2.5 * np.log10(flux[valid_flux]) + float(mag_offset)
+                valid_mag_error = valid_flux & valid_flux_error
+                errors[valid_mag_error] = flux_error[valid_mag_error] / (flux[valid_mag_error] * MAG_CONV)
 
-        input_cols_to_drop.extend([col_in, err_in])
+            if group["will_dered_mag"]:
+                a_lambda = df["E_BV"].values * a_ebv[band]
+                values = values - a_lambda
 
-        if inv.get("replace_invalid_values"):
-            invalid_val, invalid_err = get_invalid_masks(values, errors)
-            col_repl = as_float_or_none(inv.get("col_value_to_replace"))
-            err_repl = as_float_or_none(inv.get("err_value_to_replace"))
+            input_cols_to_drop.extend([col_in, err_in])
 
-            if inv.get("how_to_replace_col_values") == "all":
-                values = apply_replacement(values, invalid_val, col_repl)
-            elif inv.get("how_to_replace_col_values") == "only_with_invalid_err":
-                values = apply_replacement(values, invalid_err, col_repl)
+            if inv.get("replace_invalid_values"):
+                invalid_val, invalid_err = get_invalid_masks(values, errors)
+                col_repl = as_float_or_none(inv.get("col_value_to_replace"))
+                err_repl = as_float_or_none(inv.get("err_value_to_replace"))
 
-            if inv.get("how_to_replace_err_values") == "all":
-                errors = apply_replacement(errors, invalid_err, err_repl)
-            elif inv.get("how_to_replace_err_values") == "only_with_invalid_col":
-                errors = apply_replacement(errors, invalid_val, err_repl)
+                if inv.get("how_to_replace_col_values") == "all":
+                    values = apply_replacement(values, invalid_val, col_repl)
+                elif inv.get("how_to_replace_col_values") == "only_with_invalid_err":
+                    values = apply_replacement(values, invalid_err, col_repl)
 
-        if inv.get("round_col"):
-            values = np.round(values, int(inv.get("round_col_decimal_cases", 5)))
-        if inv.get("round_err"):
-            errors = np.round(errors, int(inv.get("round_err_decimal_cases", 5)))
+                if inv.get("how_to_replace_err_values") == "all":
+                    errors = apply_replacement(errors, invalid_err, err_repl)
+                elif inv.get("how_to_replace_err_values") == "only_with_invalid_col":
+                    errors = apply_replacement(errors, invalid_val, err_repl)
 
-        df[final_col] = values
-        df[final_err_col] = errors
+            if inv.get("round_col"):
+                values = np.round(values, int(inv.get("round_col_decimal_cases", 5)))
+            if inv.get("round_err"):
+                errors = np.round(errors, int(inv.get("round_err_decimal_cases", 5)))
+
+            output_dtype = group.get("output_dtype")
+            if output_dtype is not None:
+                values = values.astype(output_dtype)
+                errors = errors.astype(output_dtype)
+
+            df[final_col] = values
+            df[final_err_col] = errors
 
     if needs_ebv and "E_BV" in df.columns:
         df.drop(columns=["E_BV"], inplace=True)
@@ -255,14 +357,17 @@ def process_dataframe(
 
 def process_file_df(
     path: str,
-    cfg_path: str,
+    cfg_path: str | dict,
     will_mag: bool,
     will_dered_flux: bool,
     will_dered_mag: bool,
     output_columns=None,
 ):
     """Read, filter, transform, and return a single catalog file as a dataframe."""
-    cfgw = _load_processing_config(cfg_path)
+    if isinstance(cfg_path, dict):
+        cfgw = cfg_path
+    else:
+        cfgw = normalize_catalog_config(_load_processing_config(cfg_path), warn_deprecated=False)
     input_cfg = cfgw.get("input", {})
     input_user_selected_cols = list(input_cfg.get("user_selected_cols", []) or [])
     df = detect_and_read(path, input_user_selected_cols)
