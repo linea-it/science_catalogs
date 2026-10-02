@@ -44,6 +44,12 @@ def test_dp2_batch_contains_all_positional_non_solar_catalogs():
     assert all(cfg["photometry"] == {"enabled": False} for name, cfg in configs.items() if name != "object")
     assert all(cfg["output"]["on_existing"] == "error" for cfg in configs.values())
     assert all(cfg["collection"]["margin"]["threshold_arcsec"] == 5.0 for cfg in configs.values())
+    data_catalogs = {"object", "object_forced_source", "object_shear_all"}
+    for name, config in configs.items():
+        storage = "data" if name in data_catalogs else "mnt"
+        root = f"<path-to-data-on-{storage}>"
+        assert config["input"]["catalog_path"] == f"{root}/primary/catalogs/{name}"
+        assert config["output"]["base_path"] == f"{root}/secondary/catalogs"
 
 
 def test_batch_defaults_are_deep_merged(tmp_path):

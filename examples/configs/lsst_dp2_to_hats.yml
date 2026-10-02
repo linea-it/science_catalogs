@@ -1,5 +1,7 @@
 # Run example:
 # science-catalogs examples/configs/lsst_dp2_to_hats.yml
+# Replace the two storage placeholders independently. Catalogs remain on the
+# same storage root from which their primary inputs were read.
 
 batch:
   # Fail instead of silently reusing an existing HATS collection.
@@ -24,7 +26,7 @@ batch:
     photometry:
       enabled: false
     output:
-      base_path: <path-to-data>/secondary/catalogs
+      base_path: <path-to-data-on-mnt>/secondary/catalogs
       save_as: hats
     collection:
       margin:
@@ -33,7 +35,7 @@ batch:
   catalogs:
     - name: dia_object
       input:
-        catalog_path: <path-to-data>/dia_object
+        catalog_path: <path-to-data-on-mnt>/primary/catalogs/dia_object
         catalog_pattern: "*.parq"
         ra_col: ra
         dec_col: dec
@@ -45,7 +47,7 @@ batch:
 
     - name: dia_object_forced_source
       input:
-        catalog_path: <path-to-data>/dia_object_forced_source
+        catalog_path: <path-to-data-on-mnt>/primary/catalogs/dia_object_forced_source
         catalog_pattern: "*.parq"
         ra_col: coord_ra
         dec_col: coord_dec
@@ -57,7 +59,7 @@ batch:
 
     - name: dia_source
       input:
-        catalog_path: <path-to-data>/dia_source
+        catalog_path: <path-to-data-on-mnt>/primary/catalogs/dia_source
         catalog_pattern: "*.parq"
         ra_col: ra
         dec_col: dec
@@ -69,7 +71,7 @@ batch:
 
     - name: isolated_star_stellar_motions
       input:
-        catalog_path: <path-to-data>/isolated_star_stellar_motions
+        catalog_path: <path-to-data-on-mnt>/primary/catalogs/isolated_star_stellar_motions
         catalog_pattern: "*.parq"
         ra_col: ra
         dec_col: dec
@@ -81,7 +83,7 @@ batch:
 
     - name: object
       input:
-        catalog_path: <path-to-data>/object
+        catalog_path: <path-to-data-on-data>/primary/catalogs/object
         catalog_pattern: "*.parq"
         ra_col: coord_ra
         dec_col: coord_dec
@@ -115,6 +117,7 @@ batch:
               error_pattern: BAND_cModelMagErr
               dtype: float32
       output:
+        base_path: <path-to-data-on-data>/secondary/catalogs
         hats_artifact_name: object_collection
       collection:
         catalog:
@@ -125,11 +128,12 @@ batch:
 
     - name: object_forced_source
       input:
-        catalog_path: <path-to-data>/object_forced_source
+        catalog_path: <path-to-data-on-data>/primary/catalogs/object_forced_source
         catalog_pattern: "*.parq"
         ra_col: coord_ra
         dec_col: coord_dec
       output:
+        base_path: <path-to-data-on-data>/secondary/catalogs
         hats_artifact_name: object_forced_source_collection
       collection:
         catalog:
@@ -137,11 +141,12 @@ batch:
 
     - name: object_shear_all
       input:
-        catalog_path: <path-to-data>/object_shear_all
+        catalog_path: <path-to-data-on-data>/primary/catalogs/object_shear_all
         catalog_pattern: "*.parq"
         ra_col: ra
         dec_col: dec
       output:
+        base_path: <path-to-data-on-data>/secondary/catalogs
         hats_artifact_name: object_shear_all_collection
       collection:
         catalog:
@@ -149,7 +154,7 @@ batch:
 
     - name: source
       input:
-        catalog_path: <path-to-data>/source
+        catalog_path: <path-to-data-on-mnt>/primary/catalogs/source
         catalog_pattern: "**/*.parq"
         ra_col: coord_ra
         dec_col: coord_dec
@@ -161,7 +166,7 @@ batch:
 
     - name: visit_detector_table
       input:
-        catalog_path: <path-to-data>/visit_detector_table
+        catalog_path: <path-to-data-on-mnt>/primary/catalogs/visit_detector_table
         catalog_pattern: "*.parq"
         ra_col: ra
         dec_col: dec

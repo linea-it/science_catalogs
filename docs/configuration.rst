@@ -102,6 +102,8 @@ Batch layout
 A batch configuration runs catalogs sequentially on one shared Dask executor. Existing
 single-catalog YAML files keep the canonical layout above and require no changes.
 Defaults are recursively merged into each named catalog; catalog values take precedence.
+This includes ``output.base_path``, so catalogs in one batch may write to different
+storage roots while still sharing an executor.
 
 .. code-block:: yaml
 
