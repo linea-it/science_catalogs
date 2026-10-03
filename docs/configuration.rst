@@ -96,6 +96,28 @@ to ``metadata.release``, ``cluster`` to ``execution``, and the old flat invalid-
 keys to the nested value/error policy. New configurations should use only the canonical
 layout.
 
+HATS partitioning
+----------------------------------------------------------------------------------------
+
+For HATS output, ``collection.catalog.pixel_threshold`` controls the target maximum
+number of rows in a spatial partition, while
+``collection.catalog.highest_healpix_order`` controls how far dense regions may be
+subdivided. When omitted, the installed ``hats-import`` defaults are used.
+
+.. code-block:: yaml
+
+   output:
+     save_as: hats
+     hats_artifact_name: object_collection
+
+   collection:
+     catalog:
+       artifact_name: object
+       pixel_threshold: 1000000
+       highest_healpix_order: 12
+     margin:
+       threshold_arcsec: 5.0
+
 Batch layout
 ----------------------------------------------------------------------------------------
 

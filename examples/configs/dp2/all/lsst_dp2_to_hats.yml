@@ -59,6 +59,7 @@ batch:
       collection:
         catalog:
           artifact_name: dia_object_forced_source
+          highest_healpix_order: 12
 
     - name: dia_source
       input:

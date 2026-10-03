@@ -281,7 +281,23 @@ def validate_catalog_config(cfg: dict[str, Any]) -> None:
     collection = _mapping(cfg.get("collection"), "collection")
     _reject_unknown(collection, {"catalog", "margin", "indexes", "margin_threshold"}, "collection")
     catalog = _mapping(collection.get("catalog"), "collection.catalog")
-    _reject_unknown(catalog, {"artifact_name"}, "collection.catalog")
+    _reject_unknown(
+        catalog,
+        {"artifact_name", "pixel_threshold", "highest_healpix_order"},
+        "collection.catalog",
+    )
+    pixel_threshold = catalog.get("pixel_threshold")
+    if pixel_threshold is not None and (
+        isinstance(pixel_threshold, bool) or not isinstance(pixel_threshold, int) or pixel_threshold <= 0
+    ):
+        raise ValueError("collection.catalog.pixel_threshold must be a positive integer")
+    highest_healpix_order = catalog.get("highest_healpix_order")
+    if highest_healpix_order is not None and (
+        isinstance(highest_healpix_order, bool)
+        or not isinstance(highest_healpix_order, int)
+        or not 0 <= highest_healpix_order <= 29
+    ):
+        raise ValueError("collection.catalog.highest_healpix_order must be an integer from 0 to 29")
     margin = _mapping(collection.get("margin"), "collection.margin")
     _reject_unknown(margin, {"threshold_arcsec", "artifact_name"}, "collection.margin")
     indexes = collection.get("indexes", []) or []

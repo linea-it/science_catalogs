@@ -22,6 +22,7 @@ output:
 collection:
   catalog:
     artifact_name: dia_object_forced_source
+    highest_healpix_order: 12
   margin:
     threshold_arcsec: 5.0
 

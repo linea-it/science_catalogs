@@ -191,6 +191,34 @@ def test_normalize_catalog_config_rejects_unknown_keys():
         normalize_catalog_config({"output": {"save_ass": "parquet"}})
 
 
+def test_normalize_catalog_config_accepts_hats_partitioning_options():
+    """Keep HATS row and spatial partition limits in the canonical catalog section."""
+    normalized = normalize_catalog_config(
+        {"collection": {"catalog": {"pixel_threshold": 2_000_000, "highest_healpix_order": 12}}}
+    )
+
+    assert normalized["collection"]["catalog"] == {
+        "pixel_threshold": 2_000_000,
+        "highest_healpix_order": 12,
+    }
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "message"),
+    [
+        ("pixel_threshold", 0, "positive integer"),
+        ("pixel_threshold", True, "positive integer"),
+        ("highest_healpix_order", -1, "integer from 0 to 29"),
+        ("highest_healpix_order", 30, "integer from 0 to 29"),
+        ("highest_healpix_order", True, "integer from 0 to 29"),
+    ],
+)
+def test_normalize_catalog_config_rejects_invalid_hats_partitioning_options(key, value, message):
+    """Reject limits that hats-import cannot use to partition a HATS catalog."""
+    with pytest.raises(ValueError, match=message):
+        normalize_catalog_config({"collection": {"catalog": {key: value}}})
+
+
 def test_resolve_nested_invalid_handling_preserves_all_operations():
     """Map nested value/error policies to every existing processing feature."""
     resolved = resolve_invalid_handling(

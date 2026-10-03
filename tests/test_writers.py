@@ -109,7 +109,11 @@ def test_write_hats_catalog_adds_configured_indexes(monkeypatch, tmp_path):
         pd.DataFrame({"objectId": [1], "ra": [1.0], "dec": [2.0]}),
         {"save_as": "hats", "hats_artifact_name": "demo"},
         {
-            "catalog": {"artifact_name": "object_lc"},
+            "catalog": {
+                "artifact_name": "object_lc",
+                "pixel_threshold": 2_000_000,
+                "highest_healpix_order": 12,
+            },
             "margin": {"threshold_arcsec": 5.0},
             "indexes": [{"column": "objectId", "drop_duplicates": False}],
         },
@@ -121,6 +125,8 @@ def test_write_hats_catalog_adds_configured_indexes(monkeypatch, tmp_path):
     )
 
     assert captured["catalog"]["output_artifact_name"] == "object_lc"
+    assert captured["catalog"]["pixel_threshold"] == 2_000_000
+    assert captured["catalog"]["highest_healpix_order"] == 12
     assert captured["indexes"] == [
         {
             "indexing_column": "objectId",

@@ -155,7 +155,8 @@ def write_hats_catalog(
 
     source_format = output_cfg.get("hats_source_save_as", "parquet") or "parquet"
     artifact_name = output_cfg.get("hats_artifact_name") or f"{suffix}_collection"
-    catalog_artifact_name = collection_cfg.get("catalog", {}).get("artifact_name", "catalog")
+    catalog_cfg = collection_cfg.get("catalog", {})
+    catalog_artifact_name = catalog_cfg.get("artifact_name", "catalog")
     margin_cfg = collection_cfg.get("margin", {})
     margin_threshold = output_cfg.get("hats_margin_threshold")
     if margin_threshold is None:
@@ -221,12 +222,19 @@ def write_hats_catalog(
             output_path=str(output_path),
             progress_bar=True,
             tqdm_kwargs={"file": sys.stdout},
-        ).catalog(
-            output_artifact_name=catalog_artifact_name,
-            ra_column=ra_col,
-            dec_column=dec_col,
-            input_file_list=[Path(path) for path in written_paths],
-            file_reader=file_reader,
+        )
+        catalog_kwargs = {
+            "output_artifact_name": catalog_artifact_name,
+            "ra_column": ra_col,
+            "dec_column": dec_col,
+            "input_file_list": [Path(path) for path in written_paths],
+            "file_reader": file_reader,
+        }
+        for key in ("pixel_threshold", "highest_healpix_order"):
+            if key in catalog_cfg:
+                catalog_kwargs[key] = catalog_cfg[key]
+        args = args.catalog(
+            **catalog_kwargs,
         )
         margin_kwargs = {"margin_threshold": margin_threshold, "is_default": True}
         if margin_cfg.get("artifact_name"):

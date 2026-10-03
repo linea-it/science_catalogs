@@ -44,6 +44,10 @@ def test_dp2_batch_contains_all_positional_non_solar_catalogs():
     assert configs["dia_object"]["collection"]["indexes"] == [
         {"column": "diaObjectId", "drop_duplicates": False}
     ]
+    assert configs["dia_object_forced_source"]["collection"]["catalog"] == {
+        "artifact_name": "dia_object_forced_source",
+        "highest_healpix_order": 12,
+    }
     assert all(cfg["photometry"] == {"enabled": False} for name, cfg in configs.items() if name != "object")
     assert all(cfg["output"]["on_existing"] == "error" for cfg in configs.values())
     assert all(cfg["collection"]["margin"]["threshold_arcsec"] == 5.0 for cfg in configs.values())
