@@ -4,6 +4,11 @@ from __future__ import annotations
 
 import gc
 import glob
+import logging
+import re
+import warnings
+from contextlib import contextmanager
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -14,11 +19,30 @@ from dask.distributed import Client, wait
 
 from science_catalogs.executor import get_executor
 from science_catalogs.processing import process_dataframe, process_file_df
-from science_catalogs.utils.config import decide_suffix_and_flags
+from science_catalogs.utils.config import (
+    decide_photometry_suffix,
+    decide_suffix_and_flags,
+    normalize_catalog_config,
+)
 from science_catalogs.utils.dust import configure_dustmaps_path
 from science_catalogs.utils.io_readers import detect_and_read
 from science_catalogs.utils.partitioning import reorder_and_rechunk
 from science_catalogs.utils.writers import write_hats_catalog, write_partitions
+
+logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _suppress_dask_large_graph_warning():
+    """Hide Dask's advisory large-graph warning while preserving all others."""
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=re.escape("Sending large graph of size"),
+            category=UserWarning,
+            module=r"distributed\.client",
+        )
+        yield
 
 
 @dataclass(slots=True)
@@ -34,12 +58,121 @@ class PreparedCatalog:
     input_files: list[str] = field(default_factory=list)
 
 
-def load_catalog_config(config_path: str) -> dict[str, Any]:
-    """Load a catalog-processing YAML config from disk."""
+@dataclass(slots=True)
+class CatalogBuildSpec:
+    """One named catalog configuration in an executable build plan."""
+
+    name: str | None
+    config: dict[str, Any]
+
+
+@dataclass(slots=True)
+class CatalogBuildPlan:
+    """Validated single-catalog or batch build plan."""
+
+    catalogs: list[CatalogBuildSpec]
+    execution_cfg: dict[str, Any]
+    is_batch: bool = False
+
+
+def _load_yaml_config(config_path: str) -> dict[str, Any]:
+    """Load a YAML mapping without assuming the single-catalog schema."""
     import yaml
 
     with open(config_path, "r", encoding="utf-8") as _file:
-        return yaml.safe_load(_file) or {}
+        config = yaml.safe_load(_file) or {}
+    if not isinstance(config, dict):
+        raise ValueError("Configuration root must be a mapping")
+    return config
+
+
+def load_catalog_config(config_path: str) -> dict[str, Any]:
+    """Load a catalog-processing YAML config from disk."""
+    return normalize_catalog_config(_load_yaml_config(config_path))
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge mappings while replacing all non-mapping values."""
+    merged = deepcopy(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = deepcopy(value)
+    return merged
+
+
+def load_build_plan(config_path: str) -> CatalogBuildPlan:
+    """Load and validate either a legacy single catalog or a batch configuration."""
+    raw = _load_yaml_config(config_path)
+    if "batch" not in raw:
+        config = normalize_catalog_config(raw)
+        return CatalogBuildPlan(
+            catalogs=[CatalogBuildSpec(name=None, config=config)],
+            execution_cfg=config.get("execution", {}),
+        )
+
+    if set(raw) != {"batch"}:
+        extra = sorted(set(raw) - {"batch"})
+        raise ValueError(f"Batch configuration cannot contain sibling root keys: {extra}")
+    batch = raw["batch"]
+    if not isinstance(batch, dict):
+        raise ValueError("batch must be a mapping")
+    allowed_batch_keys = {"execution", "defaults", "catalogs", "on_existing"}
+    unknown = sorted(set(batch) - allowed_batch_keys)
+    if unknown:
+        raise ValueError(f"Unknown configuration key(s) in batch: {unknown}")
+
+    execution_cfg = batch.get("execution", {}) or {}
+    defaults = batch.get("defaults", {}) or {}
+    catalog_entries = batch.get("catalogs", []) or []
+    on_existing = batch.get("on_existing", "error")
+    if not isinstance(execution_cfg, dict):
+        raise ValueError("batch.execution must be a mapping")
+    if not isinstance(defaults, dict):
+        raise ValueError("batch.defaults must be a mapping")
+    if "execution" in defaults or "cluster" in defaults:
+        raise ValueError("Configure execution only in batch.execution")
+    if not isinstance(catalog_entries, list) or not catalog_entries:
+        raise ValueError("batch.catalogs must be a non-empty list")
+    if on_existing not in {"reuse", "error", "replace"}:
+        raise ValueError("batch.on_existing must be 'reuse', 'error', or 'replace'")
+
+    specs = []
+    names = set()
+    hats_artifacts = set()
+    for index, entry in enumerate(catalog_entries):
+        if not isinstance(entry, dict):
+            raise ValueError(f"batch.catalogs[{index}] must be a mapping")
+        name = entry.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"batch.catalogs[{index}].name must be a non-empty string")
+        name = name.strip()
+        if name in names:
+            raise ValueError(f"Duplicate batch catalog name: {name}")
+        names.add(name)
+        if "execution" in entry or "cluster" in entry:
+            raise ValueError(f"Configure execution only in batch.execution, not catalog '{name}'")
+
+        catalog_override = {key: value for key, value in entry.items() if key != "name"}
+        config = _deep_merge(defaults, catalog_override)
+        config["execution"] = deepcopy(execution_cfg)
+        output_cfg = config.setdefault("output", {})
+        if not isinstance(output_cfg, dict):
+            raise ValueError(f"batch catalog '{name}' output must be a mapping")
+        output_cfg.setdefault("on_existing", on_existing)
+        config = normalize_catalog_config(config)
+
+        if config.get("output", {}).get("save_as", "parquet") == "hats":
+            artifact_name = config["output"].get("hats_artifact_name")
+            if not isinstance(artifact_name, str) or not artifact_name.strip():
+                raise ValueError(f"Batch HATS catalog '{name}' requires output.hats_artifact_name")
+            if artifact_name in hats_artifacts:
+                raise ValueError(f"Duplicate batch HATS artifact name: {artifact_name}")
+            hats_artifacts.add(artifact_name)
+        specs.append(CatalogBuildSpec(name=name, config=config))
+
+    return CatalogBuildPlan(catalogs=specs, execution_cfg=execution_cfg, is_batch=True)
 
 
 def _is_hats_catalog_path(path: Path) -> bool:
@@ -54,7 +187,7 @@ def _is_hats_catalog_path(path: Path) -> bool:
 
 def _glob_input_files(base_path: Path, pattern: str) -> list[str]:
     """Collect matching input files below a directory."""
-    return sorted(glob.glob((base_path / pattern).as_posix()))
+    return sorted(glob.glob((base_path / pattern).as_posix(), recursive=True))
 
 
 def _resolve_input_source(inputs: dict[str, Any]) -> dict[str, Any]:
@@ -138,7 +271,7 @@ def prepare_catalog(
     client=None,
 ) -> PreparedCatalog:
     """Build the lazy processed catalog from file inputs or an existing HATS catalog."""
-    cfg = config if config is not None else load_catalog_config(config_path)
+    cfg = normalize_catalog_config(config) if config is not None else load_catalog_config(config_path)
 
     inputs = cfg.get("input", {})
     dust = cfg.get("dust", {})
@@ -146,12 +279,16 @@ def prepare_catalog(
 
     configure_dustmaps_path(dust, client=client)
 
-    suffix, will_mag, will_dered_flux, will_dered_mag = decide_suffix_and_flags(
-        inputs,
-        inputs.get("compute_magnitude", True),
-        inputs.get("compute_dereddening", True),
-        dust,
-    )
+    if "photometry" in cfg:
+        suffix, flags = decide_photometry_suffix(cfg)
+        will_mag, will_dered_flux, will_dered_mag = flags
+    else:
+        suffix, will_mag, will_dered_flux, will_dered_mag = decide_suffix_and_flags(
+            inputs,
+            inputs.get("compute_magnitude", True),
+            inputs.get("compute_dereddening", True),
+            dust,
+        )
 
     input_source = _resolve_input_source(inputs)
 
@@ -167,7 +304,7 @@ def prepare_catalog(
         delayed_dfs = [
             delayed(process_file_df)(
                 p,
-                cfg_path=config_path,
+                cfg_path=cfg,
                 will_mag=will_mag,
                 will_dered_flux=will_dered_flux,
                 will_dered_mag=will_dered_mag,
@@ -337,7 +474,7 @@ def build_catalog(
     *,
     output_dir: str | None = None,
     output_format: str | None = None,
-) -> str | tuple[str, ...]:
+) -> str | tuple[str, ...] | dict[str, str | tuple[str, ...]]:
     """
     Execute the full catalog-building flow and persist the result to disk.
 
@@ -345,26 +482,76 @@ def build_catalog(
     The returned value is the written parquet partition paths, or the HATS
     artifact directory when `output_format="hats"`.
     """
-    cfg = load_catalog_config(config_path)
-    cluster = get_executor(cfg.get("cluster", {}))
+    logger.info("[1/5] Loading configuration: %s", config_path)
+    plan = load_build_plan(config_path)
+    execution_cfg = plan.execution_cfg
+    executor_name = execution_cfg.get("executor", "local")
+    if executor_name == "slurm":
+        worker_count = int(execution_cfg.get("slurm", {}).get("dask_scale_number", 1) or 1)
+        logger.info("[2/5] Starting Dask executor: SLURM (%d workers)", worker_count)
+    else:
+        logger.info("[2/5] Starting Dask executor: %s", executor_name)
+
+    cluster = get_executor(execution_cfg)
     client = Client(cluster)
     cluster_ref = client.cluster
     cluster_comm = getattr(cluster_ref, "comm", None)
 
     try:
+        logger.info("Waiting for Dask workers to become ready")
         if cluster_comm:
             wait(cluster_comm)
+        logger.info("Dask executor is ready")
         client.run(lambda: gc.collect())
 
-        prepared = prepare_catalog(config_path, config=cfg, client=client)
-        resolved_output_dir = _resolve_output_dir(prepared, output_dir)
-        written_paths = write_catalog(
-            prepared,
-            resolved_output_dir,
-            client=client,
-            output_format=output_format,
-        )
-        return _normalize_written_path(tuple(written_paths))
+        results = {}
+        single_result = None
+        with _suppress_dask_large_graph_warning():
+            for index, spec in enumerate(plan.catalogs, start=1):
+                label = spec.name or "catalog"
+                logger.info(
+                    "[3/5] Preparing input catalog %d/%d: %s",
+                    index,
+                    len(plan.catalogs),
+                    label,
+                )
+                prepared = None
+                try:
+                    prepared = prepare_catalog(config_path, config=spec.config, client=client)
+                    logger.info(
+                        "Prepared %d input files in %d partitions",
+                        len(prepared.input_files),
+                        prepared.ddf.npartitions,
+                    )
+
+                    resolved_output_dir = _resolve_output_dir(prepared, output_dir)
+                    resolved_format = output_format or prepared.output_cfg.get("save_as", "parquet")
+                    if plan.is_batch and resolved_format != "hats":
+                        resolved_output_dir = str(Path(resolved_output_dir) / label)
+                    logger.info(
+                        "[4/5] Writing %s output for %s to: %s",
+                        str(resolved_format).upper(),
+                        label,
+                        resolved_output_dir,
+                    )
+                    written_paths = write_catalog(
+                        prepared,
+                        resolved_output_dir,
+                        client=client,
+                        output_format=output_format,
+                    )
+                    result = _normalize_written_path(tuple(written_paths))
+                    if plan.is_batch:
+                        results[label] = result
+                    else:
+                        single_result = result
+                finally:
+                    prepared = None
+                    gc.collect()
+                    client.run(lambda: gc.collect())
+
+        logger.info("[5/5] Catalog build completed successfully")
+        return results if plan.is_batch else single_result
     finally:
         client.close()
         cluster.close()
@@ -372,7 +559,10 @@ def build_catalog(
 
 __all__ = [
     "PreparedCatalog",
+    "CatalogBuildPlan",
+    "CatalogBuildSpec",
     "load_catalog_config",
+    "load_build_plan",
     "prepare_catalog",
     "materialize_catalog",
     "materialize_lsdb_catalog",

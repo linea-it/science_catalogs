@@ -1,0 +1,39 @@
+# Run example:
+# science-catalogs examples/configs/dp2/individual/lsst_dp2_dia_source_to_hats.yml
+
+metadata:
+  release: LSST_DP2
+
+input:
+  catalog_path: <path-to-data-on-mnt>/primary/catalogs/dia_source
+  catalog_pattern: "*.parq"
+  ra_col: ra
+  dec_col: dec
+
+photometry:
+  enabled: false
+
+output:
+  base_path: <path-to-data-on-mnt>/secondary/catalogs
+  save_as: hats
+  hats_artifact_name: dia_source_collection
+  on_existing: error
+
+collection:
+  catalog:
+    artifact_name: dia_source
+  margin:
+    threshold_arcsec: 5.0
+
+execution:
+  executor: slurm
+  slurm:
+    interface: ib0
+    queue: cpu_pipelines
+    cores: 2
+    processes: 1
+    memory: 48GB
+    walltime: "12:00:00"
+    job_extra_directives:
+      - "--account=hpc-pipelines"
+    dask_scale_number: 15

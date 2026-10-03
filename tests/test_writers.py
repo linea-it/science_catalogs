@@ -6,6 +6,7 @@ import types
 import warnings
 
 import pandas as pd
+
 from science_catalogs.utils import writers
 
 
@@ -24,6 +25,10 @@ def test_write_hats_catalog_marks_margin_as_default(monkeypatch, tmp_path):
 
         def add_margin(self, **kwargs):
             captured["margin"] = kwargs
+            return self
+
+        def add_index(self, **kwargs):
+            captured.setdefault("indexes", []).append(kwargs)
             return self
 
     fake_validation = types.SimpleNamespace(is_valid_collection=lambda path: False)
@@ -55,6 +60,82 @@ def test_write_hats_catalog_marks_margin_as_default(monkeypatch, tmp_path):
 
     assert captured["margin"]["margin_threshold"] == 5.0
     assert captured["margin"]["is_default"] is True
+
+
+def test_write_hats_catalog_adds_configured_indexes(monkeypatch, tmp_path):
+    """Create collection index catalogs from the canonical collection config."""
+    captured = {}
+
+    class _FakeCollectionArguments:
+        def __init__(self, **kwargs):
+            self.tqdm_kwargs = kwargs.get("tqdm_kwargs") or {}
+
+        def catalog(self, **kwargs):
+            captured["catalog"] = kwargs
+            return self
+
+        def add_margin(self, **kwargs):
+            return self
+
+        def add_index(self, **kwargs):
+            captured.setdefault("indexes", []).append(kwargs)
+            return self
+
+    monkeypatch.setitem(
+        sys.modules,
+        "hats.io.validation",
+        types.SimpleNamespace(is_valid_collection=lambda path: False),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hats_import.catalog.file_readers",
+        types.SimpleNamespace(CsvReader=lambda: "csv", ParquetPyarrowReader=lambda: "parquet"),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hats_import.collection.arguments",
+        types.SimpleNamespace(CollectionArguments=_FakeCollectionArguments),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hats_import.collection.run_import",
+        types.SimpleNamespace(run=lambda args, client: None),
+    )
+    monkeypatch.setattr(
+        writers, "write_partitions", lambda *args, **kwargs: [str(tmp_path / "part0.parquet")]
+    )
+
+    writers.write_hats_catalog(
+        pd.DataFrame({"objectId": [1], "ra": [1.0], "dec": [2.0]}),
+        {"save_as": "hats", "hats_artifact_name": "demo"},
+        {
+            "catalog": {
+                "artifact_name": "object_lc",
+                "pixel_threshold": 2_000_000,
+                "highest_healpix_order": 12,
+            },
+            "margin": {"threshold_arcsec": 5.0},
+            "indexes": [{"column": "objectId", "drop_duplicates": False}],
+        },
+        str(tmp_path),
+        "_demo",
+        "ra",
+        "dec",
+        client="fake_client",
+    )
+
+    assert captured["catalog"]["output_artifact_name"] == "object_lc"
+    assert captured["catalog"]["pixel_threshold"] == 2_000_000
+    assert captured["catalog"]["highest_healpix_order"] == 12
+    assert captured["indexes"] == [
+        {
+            "indexing_column": "objectId",
+            "drop_duplicates": False,
+            "include_healpix_29": True,
+            "include_order_pixel": True,
+            "include_radec": False,
+        }
+    ]
 
 
 def test_write_hats_catalog_routes_tqdm_progress_to_stdout(monkeypatch, tmp_path, capsys):
@@ -140,6 +221,29 @@ def test_write_hats_catalog_reuses_existing_collection(monkeypatch, tmp_path):
     )
 
     assert result == (str(tmp_path / "demo"),)
+
+
+def test_write_hats_catalog_can_reject_existing_collection(monkeypatch, tmp_path):
+    """Fail before staging when the configured HATS destination already exists."""
+    import pytest
+
+    monkeypatch.setitem(
+        sys.modules,
+        "hats.io.validation",
+        types.SimpleNamespace(is_valid_collection=lambda path: True),
+    )
+
+    with pytest.raises(FileExistsError, match="demo"):
+        writers.write_hats_catalog(
+            pd.DataFrame({"ra": [1.0], "dec": [2.0]}),
+            {"save_as": "hats", "hats_artifact_name": "demo", "on_existing": "error"},
+            {"margin_threshold": 5.0},
+            str(tmp_path),
+            "_demo",
+            "ra",
+            "dec",
+            client="fake_client",
+        )
 
 
 def test_suppress_hats_collection_validation_warning(caplog):

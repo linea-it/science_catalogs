@@ -1,7 +1,7 @@
 
 repos:
     # Compare the local template version to the latest remote template version
-    # This hook should always pass. It will print a message if the local version 
+    # This hook should always pass. It will print a message if the local version
     # is out of date.
   - repo: https://github.com/lincc-frameworks/pre-commit-hooks
     rev: v0.2.2
@@ -10,6 +10,7 @@ repos:
         name: Check template version
         description: Compare current template version against latest
         verbose: true
+        stages: [manual]
     # Clear output from jupyter notebooks so that only the input cells are committed.
   - repo: local
     hooks:
@@ -24,8 +25,15 @@ repos:
         entry: jupyter nbconvert --clear-output
     # Prevents committing directly branches named 'main' and 'master'.
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.4.0
+    rev: v6.0.0
     hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: debug-statements
       - id: no-commit-to-branch
         name: Prevent main branch commits
         description: Prevent the user from committing directly to the primary branch.
@@ -35,29 +43,25 @@ repos:
         args: ['--maxkb=500']
     # Verify that pyproject.toml is well formed
   - repo: https://github.com/abravalheri/validate-pyproject
-    rev: v0.24.1
+    rev: '0.26'
     hooks:
       - id: validate-pyproject
         name: Validate pyproject.toml
         description: Verify that pyproject.toml adheres to the established schema.
     # Verify that GitHub workflows are well formed
   - repo: https://github.com/python-jsonschema/check-jsonschema
-    rev: 0.28.0
+    rev: 0.38.2
     hooks:
       - id: check-github-workflows
         args: ["--verbose"]
   - repo: https://github.com/astral-sh/ruff-pre-commit
     # Ruff version.
-    rev: v0.2.1
+    rev: v0.16.10
     hooks:
       - id: ruff
-        name: Lint code using ruff; sort and organize imports 
+        name: Lint code using ruff; sort and organize imports
         types_or: [ python, pyi ]
         args: ["--fix"]
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    # Ruff version.
-    rev: v0.2.1
-    hooks:
       - id: ruff-format
         name: Format code using ruff
         types_or: [ python, pyi, jupyter ]
@@ -70,23 +74,20 @@ repos:
         verbose: true
         args:
           ["docs/pre_executed/"]
-    # Run unit tests, verify that they pass. Note that coverage is run against
-    # the ./src directory here because that is what will be committed. In the
-    # github workflow script, the coverage is run against the installed package
-    # and uploaded to Codecov by calling pytest like so:
-    # `python -m pytest --cov=<package_name> --cov-report=xml`
+    # Keep commits fast; run the complete test suite once before pushing.
   - repo: local
     hooks:
       - id: pytest-check
-        name: Run unit tests
-        description: Run unit tests with pytest.
-        entry: bash -c "if python -m pytest --co -qq; then python -m pytest --cov=./src --cov-report=html; fi"
+        name: Run unit tests before push
+        description: Run the complete unit-test suite without coverage overhead.
+        entry: python -m pytest -q
         language: system
         pass_filenames: false
         always_run: true
+        stages: [pre-push]
       - id: sphinx-docs-build
-        name: Build documentation
-        description: Build Sphinx documentation without executing notebooks.
+        name: Build documentation manually
+        description: Build Sphinx documentation without executing notebooks when explicitly requested.
         entry: >-
           python -m sphinx.cmd.build -M html docs _readthedocs
           -T -E -d _readthedocs/doctrees
@@ -95,3 +96,4 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+        stages: [manual]

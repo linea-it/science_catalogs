@@ -1,0 +1,69 @@
+# Run example:
+# science-catalogs examples/configs/dp2/individual/lsst_dp2_object_to_hats.yml
+
+metadata:
+  release: LSST_DP2
+
+input:
+  catalog_path: <path-to-data-on-data>/primary/catalogs/object
+  catalog_pattern: "*.parq"
+  ra_col: coord_ra
+  dec_col: coord_dec
+
+photometry:
+  enabled: true
+  bands: [u, g, r, i, z, y]
+  band_case: lower_case
+  keep_input_columns: true
+  magnitude:
+    system: AB
+    flux_unit: nJy
+  measurements:
+    - name: psf
+      input:
+        type: flux
+        value_pattern: BAND_psfFlux
+        error_pattern: BAND_psfFluxErr
+      output:
+        type: mag
+        value_pattern: BAND_psfMag
+        error_pattern: BAND_psfMagErr
+        dtype: float32
+    - name: cmodel
+      input:
+        type: flux
+        value_pattern: BAND_cModelFlux
+        error_pattern: BAND_cModelFluxErr
+      output:
+        type: mag
+        value_pattern: BAND_cModelMag
+        error_pattern: BAND_cModelMagErr
+        dtype: float32
+
+output:
+  base_path: <path-to-data-on-data>/secondary/catalogs
+  save_as: hats
+  hats_artifact_name: object_collection
+  on_existing: error
+
+collection:
+  catalog:
+    artifact_name: object
+  margin:
+    threshold_arcsec: 5.0
+  indexes:
+    - column: objectId
+      drop_duplicates: false
+
+execution:
+  executor: slurm
+  slurm:
+    interface: ib0
+    queue: cpu_pipelines
+    cores: 2
+    processes: 1
+    memory: 48GB
+    walltime: "12:00:00"
+    job_extra_directives:
+      - "--account=hpc-pipelines"
+    dask_scale_number: 15

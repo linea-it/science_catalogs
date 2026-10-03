@@ -1,0 +1,181 @@
+# Run example:
+# science-catalogs examples/configs/dp2/all/lsst_dp2_to_hats.yml
+# Replace the two storage placeholders independently. Catalogs remain on the
+# same storage root from which their primary inputs were read.
+
+batch:
+  # Fail instead of silently reusing an existing HATS collection.
+  on_existing: error
+
+  execution:
+    executor: slurm
+    slurm:
+      interface: ib0
+      queue: cpu_pipelines
+      cores: 2
+      processes: 1
+      memory: 48GB
+      walltime: "12:00:00"
+      job_extra_directives:
+        - "--account=hpc-pipelines"
+      dask_scale_number: 15
+
+  defaults:
+    metadata:
+      release: LSST_DP2
+    photometry:
+      enabled: false
+    output:
+      base_path: <path-to-data-on-mnt>/secondary/catalogs
+      save_as: hats
+    collection:
+      margin:
+        threshold_arcsec: 5.0
+
+  catalogs:
+    - name: dia_object
+      input:
+        catalog_path: <path-to-data-on-mnt>/primary/catalogs/dia_object
+        catalog_pattern: "*.parq"
+        ra_col: ra
+        dec_col: dec
+      output:
+        hats_artifact_name: dia_object_collection
+      collection:
+        catalog:
+          artifact_name: dia_object
+        indexes:
+          - column: diaObjectId
+            drop_duplicates: false
+
+    - name: dia_object_forced_source
+      input:
+        catalog_path: <path-to-data-on-mnt>/primary/catalogs/dia_object_forced_source
+        catalog_pattern: "*.parq"
+        ra_col: coord_ra
+        dec_col: coord_dec
+      output:
+        hats_artifact_name: dia_object_forced_source_collection
+      collection:
+        catalog:
+          artifact_name: dia_object_forced_source
+          highest_healpix_order: 12
+
+    - name: dia_source
+      input:
+        catalog_path: <path-to-data-on-mnt>/primary/catalogs/dia_source
+        catalog_pattern: "*.parq"
+        ra_col: ra
+        dec_col: dec
+      output:
+        hats_artifact_name: dia_source_collection
+      collection:
+        catalog:
+          artifact_name: dia_source
+
+    - name: isolated_star_stellar_motions
+      input:
+        catalog_path: <path-to-data-on-mnt>/primary/catalogs/isolated_star_stellar_motions
+        catalog_pattern: "*.parq"
+        ra_col: ra
+        dec_col: dec
+      output:
+        hats_artifact_name: isolated_star_stellar_motions_collection
+      collection:
+        catalog:
+          artifact_name: isolated_star_stellar_motions
+
+    - name: object
+      input:
+        catalog_path: <path-to-data-on-data>/primary/catalogs/object
+        catalog_pattern: "*.parq"
+        ra_col: coord_ra
+        dec_col: coord_dec
+      photometry:
+        enabled: true
+        bands: [u, g, r, i, z, y]
+        band_case: lower_case
+        keep_input_columns: true
+        magnitude:
+          system: AB
+          flux_unit: nJy
+        measurements:
+          - name: psf
+            input:
+              type: flux
+              value_pattern: BAND_psfFlux
+              error_pattern: BAND_psfFluxErr
+            output:
+              type: mag
+              value_pattern: BAND_psfMag
+              error_pattern: BAND_psfMagErr
+              dtype: float32
+          - name: cmodel
+            input:
+              type: flux
+              value_pattern: BAND_cModelFlux
+              error_pattern: BAND_cModelFluxErr
+            output:
+              type: mag
+              value_pattern: BAND_cModelMag
+              error_pattern: BAND_cModelMagErr
+              dtype: float32
+      output:
+        base_path: <path-to-data-on-data>/secondary/catalogs
+        hats_artifact_name: object_collection
+      collection:
+        catalog:
+          artifact_name: object
+        indexes:
+          - column: objectId
+            drop_duplicates: false
+
+    - name: object_forced_source
+      input:
+        catalog_path: <path-to-data-on-data>/primary/catalogs/object_forced_source
+        catalog_pattern: "*.parq"
+        ra_col: coord_ra
+        dec_col: coord_dec
+      output:
+        base_path: <path-to-data-on-data>/secondary/catalogs
+        hats_artifact_name: object_forced_source_collection
+      collection:
+        catalog:
+          artifact_name: object_forced_source
+
+    - name: object_shear_all
+      input:
+        catalog_path: <path-to-data-on-data>/primary/catalogs/object_shear_all
+        catalog_pattern: "*.parq"
+        ra_col: ra
+        dec_col: dec
+      output:
+        base_path: <path-to-data-on-data>/secondary/catalogs
+        hats_artifact_name: object_shear_all_collection
+      collection:
+        catalog:
+          artifact_name: object_shear_all
+
+    - name: source
+      input:
+        catalog_path: <path-to-data-on-mnt>/primary/catalogs/source
+        catalog_pattern: "**/*.parq"
+        ra_col: coord_ra
+        dec_col: coord_dec
+      output:
+        hats_artifact_name: source_collection
+      collection:
+        catalog:
+          artifact_name: source
+
+    - name: visit_detector_table
+      input:
+        catalog_path: <path-to-data-on-mnt>/primary/catalogs/visit_detector_table
+        catalog_pattern: "*.parq"
+        ra_col: ra
+        dec_col: dec
+      output:
+        hats_artifact_name: visit_detector_table_collection
+      collection:
+        catalog:
+          artifact_name: visit_detector_table

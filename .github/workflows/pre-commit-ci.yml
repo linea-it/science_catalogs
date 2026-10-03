@@ -16,7 +16,7 @@ jobs:
     steps:
     - uses: actions/checkout@v7
       with:
-        fetch-depth: 0 
+        fetch-depth: 0
     - name: Set up Python
       uses: actions/setup-python@v7
       with:
@@ -32,6 +32,8 @@ jobs:
       with:
         extra_args: --all-files --verbose
       env:
-        SKIP: "check-lincc-frameworks-template-version,no-commit-to-branch,check-added-large-files,validate-pyproject,sphinx-build,pytest-check"
+        # Branch protection is a local safeguard. Tests and docs have dedicated
+        # workflows; their hooks use pre-push/manual stages and are not selected here.
+        SKIP: "no-commit-to-branch"
     - uses: pre-commit-ci/lite-action@v1.1.0
       if: failure() && github.event_name == 'pull_request' && github.event.pull_request.draft == false

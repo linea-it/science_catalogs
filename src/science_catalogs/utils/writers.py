@@ -20,6 +20,7 @@ from dask import delayed
 _fname_safe_re = re.compile(r"[^A-Za-z0-9._-]+")
 _HATS_COLLECTION_VALIDATION_MESSAGE = "Looking for catalog - found collection."
 _HATS_PARTITION_INFO_WARNING = "Computing partitions from catalog parquet files. This may be slow."
+logger = logging.getLogger(__name__)
 
 
 class _SuppressHatsCollectionValidationWarning(logging.Filter):
@@ -121,7 +122,9 @@ def write_partitions(ddf_out: dd.DataFrame, output_cfg: dict[str, Any], data_dir
     tasks = [
         _write_part(part, data_dir, suffix, i, ext, col_for_name) for i, part in enumerate(delayed_parts)
     ]
+    logger.info("Writing %d %s partition(s)", len(tasks), ext)
     written_paths = dask.compute(*tasks)
+    logger.info("Finished writing %d partition(s)", len(written_paths))
     return written_paths
 
 
@@ -141,6 +144,10 @@ def write_hats_catalog(
     if not ra_col or not dec_col:
         raise ValueError("HATS output requires both ra_col and dec_col")
 
+    on_existing = "replace" if force_recreate else output_cfg.get("on_existing", "reuse")
+    if on_existing not in {"reuse", "error", "replace"}:
+        raise ValueError("output.on_existing must be 'reuse', 'error', or 'replace'")
+
     try:
         from hats.io.validation import is_valid_collection
     except Exception as exc:  # pragma: no cover
@@ -148,16 +155,39 @@ def write_hats_catalog(
 
     source_format = output_cfg.get("hats_source_save_as", "parquet") or "parquet"
     artifact_name = output_cfg.get("hats_artifact_name") or f"{suffix}_collection"
+    catalog_cfg = collection_cfg.get("catalog", {})
+    catalog_artifact_name = catalog_cfg.get("artifact_name", "catalog")
+    margin_cfg = collection_cfg.get("margin", {})
     margin_threshold = output_cfg.get("hats_margin_threshold")
     if margin_threshold is None:
-        margin_threshold = collection_cfg.get("margin_threshold", 10.0)
+        margin_threshold = margin_cfg.get("threshold_arcsec", collection_cfg.get("margin_threshold", 10.0))
+    index_cfgs = collection_cfg.get("indexes", []) or []
+    if not isinstance(index_cfgs, list):
+        raise ValueError("collection.indexes must be a list")
+    for index_cfg in index_cfgs:
+        if not isinstance(index_cfg, dict) or not index_cfg.get("column"):
+            raise ValueError("Each collection.indexes entry requires a column")
+        if index_cfg["column"] not in ddf_out.columns:
+            raise ValueError(f"HATS index column not found: {index_cfg['column']}")
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     artifact_path = output_path / artifact_name
 
-    if not force_recreate and is_valid_collection(artifact_path):
-        return (str(artifact_path),)
+    artifact_is_valid = is_valid_collection(artifact_path)
+    if artifact_is_valid:
+        if on_existing == "reuse":
+            logger.info("Reusing existing HATS collection: %s", artifact_path)
+            return (str(artifact_path),)
+        if on_existing == "error":
+            raise FileExistsError(f"HATS output already exists: {artifact_path}")
+    elif artifact_path.exists():
+        if on_existing == "error":
+            raise FileExistsError(f"HATS output already exists: {artifact_path}")
+        if on_existing == "reuse":
+            raise FileExistsError(
+                f"HATS output path exists but is not a valid collection and cannot be reused: {artifact_path}"
+            )
 
     try:
         from hats_import.catalog.file_readers import CsvReader, ParquetPyarrowReader
@@ -166,7 +196,7 @@ def write_hats_catalog(
     except Exception as exc:  # pragma: no cover
         raise RuntimeError("hats-import not available in the environment") from exc
 
-    if force_recreate and artifact_path.exists():
+    if on_existing == "replace" and artifact_path.exists():
         if artifact_path.is_dir():
             shutil.rmtree(artifact_path)
         else:
@@ -187,26 +217,41 @@ def write_hats_catalog(
         else:  # pragma: no cover
             raise ValueError("HATS output supports only parquet or csv as staging formats")
 
-        args = (
-            CollectionArguments(
-                output_artifact_name=artifact_name,
-                output_path=str(output_path),
-                progress_bar=True,
-                tqdm_kwargs={"file": sys.stdout},
-            )
-            .catalog(
-                output_artifact_name="catalog",
-                ra_column=ra_col,
-                dec_column=dec_col,
-                input_file_list=[Path(path) for path in written_paths],
-                file_reader=file_reader,
-            )
-            .add_margin(
-                output_artifact_name=f"margin_{str(margin_threshold).rstrip('0').rstrip('.')}arcs",
-                margin_threshold=margin_threshold,
-                is_default=True,
-            )
+        args = CollectionArguments(
+            output_artifact_name=artifact_name,
+            output_path=str(output_path),
+            progress_bar=True,
+            tqdm_kwargs={"file": sys.stdout},
         )
+        catalog_kwargs = {
+            "output_artifact_name": catalog_artifact_name,
+            "ra_column": ra_col,
+            "dec_column": dec_col,
+            "input_file_list": [Path(path) for path in written_paths],
+            "file_reader": file_reader,
+        }
+        for key in ("pixel_threshold", "highest_healpix_order"):
+            if key in catalog_cfg:
+                catalog_kwargs[key] = catalog_cfg[key]
+        args = args.catalog(
+            **catalog_kwargs,
+        )
+        margin_kwargs = {"margin_threshold": margin_threshold, "is_default": True}
+        if margin_cfg.get("artifact_name"):
+            margin_kwargs["output_artifact_name"] = margin_cfg["artifact_name"]
+        args.add_margin(**margin_kwargs)
+
+        for index_cfg in index_cfgs:
+            index_kwargs = {
+                "indexing_column": index_cfg["column"],
+                "drop_duplicates": index_cfg.get("drop_duplicates", True),
+                "include_healpix_29": index_cfg.get("include_healpix_29", True),
+                "include_order_pixel": index_cfg.get("include_order_pixel", True),
+                "include_radec": index_cfg.get("include_radec", False),
+            }
+            if index_cfg.get("artifact_name"):
+                index_kwargs["output_artifact_name"] = index_cfg["artifact_name"]
+            args.add_index(**index_kwargs)
 
         created_local_client = None
         hats_client = client
@@ -217,8 +262,10 @@ def write_hats_catalog(
             hats_client = created_local_client
 
         try:
+            logger.info("Importing staging files into HATS collection: %s", artifact_name)
             with _suppress_hats_collection_validation_warning():
                 run(args, hats_client)
+            logger.info("HATS collection created: %s", artifact_path)
         finally:
             if created_local_client is not None:
                 created_local_client.close()
