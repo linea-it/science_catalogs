@@ -104,11 +104,20 @@ number of rows in a spatial partition, while
 ``collection.catalog.highest_healpix_order`` controls how far dense regions may be
 subdivided. When omitted, the installed ``hats-import`` defaults are used.
 
+``output.target_rows_per_part`` controls the approximate number of rows in each
+temporary input file passed to ``hats-import``. Increasing it reduces the number of
+Dask mapping and splitting tasks; it does not define the final spatial partitions.
+HATS still assigns every row to its HEALPix partition from the configured RA and Dec
+columns. Temporary files are normally removed after the HATS client has stopped all
+of its work. If that client cannot be stopped safely, the directory is preserved and
+logged rather than being removed while workers may still be reading it.
+
 .. code-block:: yaml
 
    output:
      save_as: hats
      hats_artifact_name: object_collection
+     target_rows_per_part: 1000000
 
    collection:
      catalog:

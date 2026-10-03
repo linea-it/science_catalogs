@@ -1,16 +1,34 @@
 """Tests for catalog output writers."""
 
 import logging
+import shutil
 import sys
 import types
 import warnings
 
 import pandas as pd
+import pytest
 
 from science_catalogs.utils import writers
 
 
-def test_write_hats_catalog_marks_margin_as_default(monkeypatch, tmp_path):
+@pytest.fixture
+def isolated_hats_client(monkeypatch):
+    """Avoid opening a real distributed client in writer unit tests."""
+
+    class _FakeClient:
+        def __init__(self):
+            self.closed = False
+
+        def close(self, timeout=None):
+            self.closed = True
+
+    fake_client = _FakeClient()
+    monkeypatch.setattr(writers, "_create_hats_client", lambda client: fake_client)
+    return fake_client
+
+
+def test_write_hats_catalog_marks_margin_as_default(monkeypatch, tmp_path, isolated_hats_client):
     """Pass is_default=True when creating the HATS margin catalog."""
     captured = {}
 
@@ -60,9 +78,11 @@ def test_write_hats_catalog_marks_margin_as_default(monkeypatch, tmp_path):
 
     assert captured["margin"]["margin_threshold"] == 5.0
     assert captured["margin"]["is_default"] is True
+    assert captured["run_client"] is isolated_hats_client
+    assert isolated_hats_client.closed is True
 
 
-def test_write_hats_catalog_adds_configured_indexes(monkeypatch, tmp_path):
+def test_write_hats_catalog_adds_configured_indexes(monkeypatch, tmp_path, isolated_hats_client):
     """Create collection index catalogs from the canonical collection config."""
     captured = {}
 
@@ -138,7 +158,9 @@ def test_write_hats_catalog_adds_configured_indexes(monkeypatch, tmp_path):
     ]
 
 
-def test_write_hats_catalog_routes_tqdm_progress_to_stdout(monkeypatch, tmp_path, capsys):
+def test_write_hats_catalog_routes_tqdm_progress_to_stdout(
+    monkeypatch, tmp_path, capsys, isolated_hats_client
+):
     """Route HATS import progress bars to stdout without moving warnings."""
     captured = {}
 
@@ -194,6 +216,94 @@ def test_write_hats_catalog_routes_tqdm_progress_to_stdout(monkeypatch, tmp_path
     assert "Catalog: Planning" not in captured_output.err
     assert "hats-import warning" in captured_output.err
     assert captured["collection"]["tqdm_kwargs"]["file"] is sys.stdout
+
+
+def test_create_hats_client_connects_to_existing_scheduler(monkeypatch):
+    """Use a separate client identity while sharing the existing scheduler."""
+    captured = {}
+
+    class _ExternalClient:
+        def scheduler_info(self):
+            return {"address": "tcp://scheduler:8786"}
+
+    def fake_client(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return "isolated-client"
+
+    monkeypatch.setitem(sys.modules, "distributed", types.SimpleNamespace(Client=fake_client))
+
+    result = writers._create_hats_client(_ExternalClient())
+
+    assert result == "isolated-client"
+    assert captured == {
+        "args": ("tcp://scheduler:8786",),
+        "kwargs": {"set_as_default": False},
+    }
+
+
+def test_write_hats_catalog_preserves_staging_when_client_cannot_close(monkeypatch, tmp_path, caplog):
+    """Never remove staging while HATS tasks may still be using it."""
+
+    class _FakeCollectionArguments:
+        def __init__(self, **kwargs):
+            self.tqdm_kwargs = kwargs.get("tqdm_kwargs") or {}
+
+        def catalog(self, **kwargs):
+            return self
+
+        def add_margin(self, **kwargs):
+            return self
+
+    class _UnclosableClient:
+        def close(self, timeout=None):
+            raise TimeoutError("scheduler did not acknowledge client close")
+
+    def fail_import(args, client):
+        raise RuntimeError("import failed")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "hats.io.validation",
+        types.SimpleNamespace(is_valid_collection=lambda path: False),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hats_import.catalog.file_readers",
+        types.SimpleNamespace(CsvReader=lambda: "csv", ParquetPyarrowReader=lambda: "parquet"),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hats_import.collection.arguments",
+        types.SimpleNamespace(CollectionArguments=_FakeCollectionArguments),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hats_import.collection.run_import",
+        types.SimpleNamespace(run=fail_import),
+    )
+    monkeypatch.setattr(
+        writers, "write_partitions", lambda *args, **kwargs: [str(tmp_path / "part0.parquet")]
+    )
+    monkeypatch.setattr(writers, "_create_hats_client", lambda client: _UnclosableClient())
+
+    with caplog.at_level(logging.ERROR), pytest.raises(RuntimeError, match="import failed"):
+        writers.write_hats_catalog(
+            pd.DataFrame({"ra": [1.0], "dec": [2.0]}),
+            {"save_as": "hats", "hats_artifact_name": "demo"},
+            {"margin_threshold": 5.0},
+            str(tmp_path),
+            "_demo",
+            "ra",
+            "dec",
+            client="shared-client",
+        )
+
+    staging_dirs = list(tmp_path.glob(".demo_staging_*"))
+    assert len(staging_dirs) == 1
+    assert "preserving staging directory" in caplog.text
+    assert "staging directory was preserved for safety" in caplog.text
+    shutil.rmtree(staging_dirs[0])
 
 
 def test_write_hats_catalog_reuses_existing_collection(monkeypatch, tmp_path):

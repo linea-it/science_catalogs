@@ -8,6 +8,31 @@ import yaml
 from science_catalogs.catalog import _resolve_input_source, load_build_plan
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+LARGE_DP2_CATALOGS = {
+    "dia_object_forced_source",
+    "dia_source",
+    "object_forced_source",
+    "object_shear_all",
+    "source",
+}
+
+
+def test_dp2_large_individual_catalogs_limit_staging_tasks():
+    """Apply the safer HATS settings to every individual catalog with at least 1B rows."""
+    individual_dir = REPO_ROOT / "examples/configs/dp2/individual"
+    configs = {}
+    for config_path in individual_dir.glob("lsst_dp2_*_to_hats.yml"):
+        name = config_path.name.removeprefix("lsst_dp2_").removesuffix("_to_hats.yml")
+        configs[name] = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+
+    configured_large_catalogs = {
+        name for name, config in configs.items() if "target_rows_per_part" in config["output"]
+    }
+    assert configured_large_catalogs == LARGE_DP2_CATALOGS
+    for name in LARGE_DP2_CATALOGS:
+        config = configs[name]
+        assert config["output"]["target_rows_per_part"] == 1_000_000
+        assert config["collection"]["catalog"]["highest_healpix_order"] == 12
 
 
 def test_dp2_batch_contains_all_positional_non_solar_catalogs():
@@ -44,10 +69,16 @@ def test_dp2_batch_contains_all_positional_non_solar_catalogs():
     assert configs["dia_object"]["collection"]["indexes"] == [
         {"column": "diaObjectId", "drop_duplicates": False}
     ]
-    assert configs["dia_object_forced_source"]["collection"]["catalog"] == {
-        "artifact_name": "dia_object_forced_source",
-        "highest_healpix_order": 12,
+    configured_large_catalogs = {
+        name for name, cfg in configs.items() if "target_rows_per_part" in cfg["output"]
     }
+    assert configured_large_catalogs == LARGE_DP2_CATALOGS
+    for name in LARGE_DP2_CATALOGS:
+        assert configs[name]["output"]["target_rows_per_part"] == 1_000_000
+        assert configs[name]["collection"]["catalog"] == {
+            "artifact_name": name,
+            "highest_healpix_order": 12,
+        }
     assert all(cfg["photometry"] == {"enabled": False} for name, cfg in configs.items() if name != "object")
     assert all(cfg["output"]["on_existing"] == "error" for cfg in configs.values())
     assert all(cfg["collection"]["margin"]["threshold_arcsec"] == 5.0 for cfg in configs.values())

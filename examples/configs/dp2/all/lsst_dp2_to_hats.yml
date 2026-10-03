@@ -56,6 +56,7 @@ batch:
         dec_col: coord_dec
       output:
         hats_artifact_name: dia_object_forced_source_collection
+        target_rows_per_part: 1000000
       collection:
         catalog:
           artifact_name: dia_object_forced_source
@@ -69,9 +70,11 @@ batch:
         dec_col: dec
       output:
         hats_artifact_name: dia_source_collection
+        target_rows_per_part: 1000000
       collection:
         catalog:
           artifact_name: dia_source
+          highest_healpix_order: 12
 
     - name: isolated_star_stellar_motions
       input:
@@ -139,9 +142,11 @@ batch:
       output:
         base_path: <path-to-data-on-data>/secondary/catalogs
         hats_artifact_name: object_forced_source_collection
+        target_rows_per_part: 1000000
       collection:
         catalog:
           artifact_name: object_forced_source
+          highest_healpix_order: 12
 
     - name: object_shear_all
       input:
@@ -152,9 +157,11 @@ batch:
       output:
         base_path: <path-to-data-on-data>/secondary/catalogs
         hats_artifact_name: object_shear_all_collection
+        target_rows_per_part: 1000000
       collection:
         catalog:
           artifact_name: object_shear_all
+          highest_healpix_order: 12
 
     - name: source
       input:
@@ -164,9 +171,11 @@ batch:
         dec_col: coord_dec
       output:
         hats_artifact_name: source_collection
+        target_rows_per_part: 1000000
       collection:
         catalog:
           artifact_name: source
+          highest_healpix_order: 12
 
     - name: visit_detector_table
       input:

@@ -20,6 +20,7 @@ from dask import delayed
 _fname_safe_re = re.compile(r"[^A-Za-z0-9._-]+")
 _HATS_COLLECTION_VALIDATION_MESSAGE = "Looking for catalog - found collection."
 _HATS_PARTITION_INFO_WARNING = "Computing partitions from catalog parquet files. This may be slow."
+_HATS_CLIENT_CLOSE_TIMEOUT_SECONDS = 60
 logger = logging.getLogger(__name__)
 
 
@@ -128,6 +129,19 @@ def write_partitions(ddf_out: dd.DataFrame, output_cfg: dict[str, Any], data_dir
     return written_paths
 
 
+def _create_hats_client(client):
+    """Create a client whose task lifetime is limited to the HATS import."""
+    from distributed import Client
+
+    if client is None:
+        return Client(processes=False)
+
+    scheduler_address = client.scheduler_info().get("address")
+    if not scheduler_address:
+        raise RuntimeError("Could not determine the Dask scheduler address for the HATS import")
+    return Client(scheduler_address, set_as_default=False)
+
+
 def write_hats_catalog(
     ddf_out: dd.DataFrame,
     output_cfg: dict[str, Any],
@@ -205,6 +219,7 @@ def write_hats_catalog(
     # The staging files must live on a filesystem shared by Dask workers.
     staging_dir = Path(tempfile.mkdtemp(prefix=f".{artifact_name}_staging_", dir=str(output_path)))
 
+    cleanup_staging = True
     try:
         staging_cfg = dict(output_cfg)
         staging_cfg["save_as"] = source_format
@@ -253,24 +268,42 @@ def write_hats_catalog(
                 index_kwargs["output_artifact_name"] = index_cfg["artifact_name"]
             args.add_index(**index_kwargs)
 
-        created_local_client = None
-        hats_client = client
-        if hats_client is None:
-            from dask.distributed import Client
-
-            created_local_client = Client(processes=False)
-            hats_client = created_local_client
+        # hats-import owns many futures internally and does not expose them to callers.
+        # A dedicated client lets us cancel/drain only those futures before removing
+        # staging files, without affecting other work on the shared cluster.
+        hats_client = _create_hats_client(client)
+        cleanup_staging = False
+        import_error = None
 
         try:
             logger.info("Importing staging files into HATS collection: %s", artifact_name)
             with _suppress_hats_collection_validation_warning():
                 run(args, hats_client)
             logger.info("HATS collection created: %s", artifact_path)
+        except BaseException as exc:
+            import_error = exc
+            raise
         finally:
-            if created_local_client is not None:
-                created_local_client.close()
+            try:
+                # Closing the dedicated client releases its pending/running futures.
+                # Do not remove staging until the scheduler acknowledges the close.
+                hats_client.close(timeout=_HATS_CLIENT_CLOSE_TIMEOUT_SECONDS)
+                cleanup_staging = True
+            except Exception:
+                logger.exception(
+                    "Could not safely stop HATS tasks; preserving staging directory: %s",
+                    staging_dir,
+                )
+                if import_error is None:
+                    raise
     finally:
-        shutil.rmtree(staging_dir, ignore_errors=True)
+        if cleanup_staging:
+            logger.info("Removing HATS staging directory: %s", staging_dir)
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            if staging_dir.exists():
+                logger.error("Could not remove HATS staging directory: %s", staging_dir)
+        else:
+            logger.error("HATS staging directory was preserved for safety: %s", staging_dir)
 
     return (str(artifact_path),)
 
