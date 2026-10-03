@@ -12,7 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 def test_dp2_batch_contains_all_positional_non_solar_catalogs():
     """Keep the DP2 HATS example aligned with the spatial QA catalog selection."""
-    plan = load_build_plan(str(REPO_ROOT / "examples/configs/lsst_dp2_to_hats.yml"))
+    plan = load_build_plan(str(REPO_ROOT / "examples/configs/dp2/all/lsst_dp2_to_hats.yml"))
     configs = {spec.name: spec.config for spec in plan.catalogs}
 
     assert plan.is_batch is True
@@ -41,6 +41,9 @@ def test_dp2_batch_contains_all_positional_non_solar_catalogs():
     assert configs["source"]["input"]["catalog_pattern"] == "**/*.parq"
     assert configs["object"]["photometry"]["enabled"] is True
     assert len(configs["object"]["photometry"]["measurements"]) == 2
+    assert configs["dia_object"]["collection"]["indexes"] == [
+        {"column": "diaObjectId", "drop_duplicates": False}
+    ]
     assert all(cfg["photometry"] == {"enabled": False} for name, cfg in configs.items() if name != "object")
     assert all(cfg["output"]["on_existing"] == "error" for cfg in configs.values())
     assert all(cfg["collection"]["margin"]["threshold_arcsec"] == 5.0 for cfg in configs.values())

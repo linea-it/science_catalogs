@@ -1,5 +1,5 @@
 # Run example:
-# science-catalogs examples/configs/lsst_dp2_to_hats.yml
+# science-catalogs examples/configs/dp2/all/lsst_dp2_to_hats.yml
 # Replace the two storage placeholders independently. Catalogs remain on the
 # same storage root from which their primary inputs were read.
 
@@ -44,6 +44,9 @@ batch:
       collection:
         catalog:
           artifact_name: dia_object
+        indexes:
+          - column: diaObjectId
+            drop_duplicates: false
 
     - name: dia_object_forced_source
       input:
@@ -121,7 +124,7 @@ batch:
         hats_artifact_name: object_collection
       collection:
         catalog:
-          artifact_name: object_lc
+          artifact_name: object
         indexes:
           - column: objectId
             drop_duplicates: false

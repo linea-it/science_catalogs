@@ -106,8 +106,9 @@ photometric transformations fail before catalog materialization begins.
 A YAML file may also contain a `batch` section with shared `defaults` and a list
 of named `catalogs`. Batch entries run one at a time on the same Dask executor and
 the command reports the artifact produced for each catalog. See
-`docs/configuration.rst` and `examples/configs/lsst_dp2_to_hats.yml` for the full
-layout.
+`docs/configuration.rst` and `examples/configs/dp2/all/lsst_dp2_to_hats.yml` for
+the full layout. Standalone configurations for each DP2 catalog are available in
+`examples/configs/dp2/individual`.
 
 ### Python API
 
