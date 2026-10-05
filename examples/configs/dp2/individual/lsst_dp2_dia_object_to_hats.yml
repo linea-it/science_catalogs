@@ -7,6 +7,7 @@ metadata:
 input:
   catalog_path: <path-to-data-on-mnt>/primary/catalogs/dia_object
   catalog_pattern: "*.parq"
+  is_id_in_index: true
   ra_col: ra
   dec_col: dec
 
