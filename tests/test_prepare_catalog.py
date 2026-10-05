@@ -116,11 +116,14 @@ def test_prepare_catalog_keeps_file_mode_behavior(monkeypatch, tmp_path):
         will_dered_flux,
         will_dered_mag,
         output_columns=None,
+        output_dtypes=None,
     ):
         seen.append(Path(path).name)
         df = pd.DataFrame({"ra": [1.0], "dec": [2.0], "mag_g": [22.5], "magerr_g": [0.1]})
         if output_columns is not None:
             df = df.loc[:, list(output_columns)]
+        if output_dtypes is not None:
+            df = df.astype(output_dtypes)
         return df
 
     monkeypatch.setattr("science_catalogs.catalog.process_file_df", fake_process_file_df)
@@ -177,6 +180,7 @@ def test_prepare_catalog_aligns_file_partition_columns_to_meta(monkeypatch, tmp_
         will_dered_flux,
         will_dered_mag,
         output_columns=None,
+        output_dtypes=None,
     ):
         df = pd.DataFrame(
             {
@@ -188,6 +192,8 @@ def test_prepare_catalog_aligns_file_partition_columns_to_meta(monkeypatch, tmp_
         )
         if output_columns is not None:
             df = df.loc[:, list(output_columns)]
+        if output_dtypes is not None:
+            df = df.astype(output_dtypes)
         return df
 
     monkeypatch.setattr("science_catalogs.catalog.process_file_df", fake_process_file_df)
@@ -197,6 +203,52 @@ def test_prepare_catalog_aligns_file_partition_columns_to_meta(monkeypatch, tmp_
 
     assert list(result.columns) == ["ra", "dec", "tract", "patch"]
     assert len(result) == 2
+
+
+def test_prepare_catalog_aligns_file_partition_dtypes_to_meta(monkeypatch, tmp_path):
+    """Normalize file-input dtypes before Dask validates partition metadata."""
+    first = tmp_path / "part1.parq"
+    second = tmp_path / "part2.parq"
+    first.write_text("", encoding="utf-8")
+    second.write_text("", encoding="utf-8")
+
+    cfg = {
+        "input": {
+            "catalog_path": str(tmp_path),
+            "catalog_pattern": "*.parq",
+            "ra_col": "ra",
+            "dec_col": "dec",
+        },
+        "photometry": {"enabled": False},
+        "output": {},
+    }
+    meta_input = pd.DataFrame(
+        {
+            "ra": pd.Series(dtype="float64"),
+            "dec": pd.Series(dtype="float64"),
+            "band": pd.Series(dtype="str"),
+        }
+    )
+
+    monkeypatch.setattr("science_catalogs.catalog.configure_dustmaps_path", lambda dust, client=None: None)
+    monkeypatch.setattr("science_catalogs.catalog.reorder_and_rechunk", lambda ddf, output_cfg: ddf)
+    monkeypatch.setattr("science_catalogs.catalog.detect_and_read", lambda *args, **kwargs: meta_input.copy())
+    monkeypatch.setattr(
+        "science_catalogs.processing.detect_and_read",
+        lambda *args, **kwargs: pd.DataFrame(
+            {
+                "ra": [10.0],
+                "dec": [-20.0],
+                "band": pd.Series(["g"], dtype=object),
+            }
+        ),
+    )
+
+    prepared = prepare_catalog("unused.yml", config=cfg)
+    result = prepared.ddf.compute()
+
+    assert result["band"].dtype == meta_input["band"].dtype
+    assert result["band"].tolist() == ["g", "g"]
 
 
 def test_prepare_catalog_reads_hats_input(monkeypatch, tmp_path):

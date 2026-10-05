@@ -105,6 +105,7 @@ def process_dataframe(
     will_dered_mag: bool,
     source_name: str = "<dataframe>",
     output_columns=None,
+    output_dtypes=None,
 ):
     """Filter and transform a dataframe according to the catalog configuration."""
     df = df.copy()
@@ -351,6 +352,8 @@ def process_dataframe(
 
     if output_columns is not None:
         df = df.loc[:, list(output_columns)]
+    if output_dtypes is not None:
+        df = df.astype(output_dtypes)
 
     return df
 
@@ -362,6 +365,7 @@ def process_file_df(
     will_dered_flux: bool,
     will_dered_mag: bool,
     output_columns=None,
+    output_dtypes=None,
 ):
     """Read, filter, transform, and return a single catalog file as a dataframe."""
     if isinstance(cfg_path, dict):
@@ -379,6 +383,7 @@ def process_file_df(
         will_dered_mag=will_dered_mag,
         source_name=path,
         output_columns=output_columns,
+        output_dtypes=output_dtypes,
     )
 
 

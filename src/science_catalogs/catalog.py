@@ -309,6 +309,7 @@ def prepare_catalog(
                 will_dered_flux=will_dered_flux,
                 will_dered_mag=will_dered_mag,
                 output_columns=tuple(processed_meta.columns),
+                output_dtypes=processed_meta.dtypes.to_dict(),
             )
             for p in input_files
         ]
