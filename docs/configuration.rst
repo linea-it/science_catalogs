@@ -20,8 +20,8 @@ columns. ``photometry`` contains scientific transformations. ``output`` and
    input:
      catalog_path: /data/object
      catalog_pattern: "*.parq"
-     files_per_partition: 32
-     parquet_metadata_workers: 16
+     files_per_partition: 1
+     parquet_metadata_workers: 8
      user_selected_cols: [objectId, coord_ra, coord_dec, g_psfFlux, g_psfFluxErr]
      ra_col: coord_ra
      dec_col: coord_dec
@@ -116,12 +116,13 @@ of its work. If that client cannot be stopped safely, the directory is preserved
 logged rather than being removed while workers may still be reading it.
 
 For directories containing many small files, ``input.files_per_partition`` groups
-that many files into one Dask partition (the default is 32). This bounds the task
-graph without changing the catalog rows. When exact staging row targets are requested
-for Parquet inputs, row counts are read from file footers instead of scanning the
-dataset, provided no row filter or initial cut is enabled.
+that many files into one Dask partition. The default is 1, which avoids unexpectedly
+combining large or wide files in memory. Increase it explicitly for datasets made of
+many small files. When exact staging row targets are requested for Parquet inputs, row
+counts are read from file footers instead of scanning the dataset, provided no row
+filter or initial cut is enabled.
 ``input.parquet_metadata_workers`` controls the bounded footer-reading thread pool
-(default 16).
+(default 8).
 
 For SLURM, ``execution.slurm.death_timeout`` controls how long a worker may take to
 connect to the scheduler (default 600 seconds). ``execution.worker_wait_timeout``

@@ -95,6 +95,52 @@ def test_preflight_batches_files_and_reads_parquet_footer_counts(tmp_path):
     assert source["partition_row_counts"] == [4, 4, 2]
 
 
+def test_preflight_defaults_to_one_file_per_partition(tmp_path):
+    """Favor bounded worker memory when no file grouping is configured."""
+    for index in range(3):
+        (tmp_path / f"part{index}.csv").write_text("value\n1\n", encoding="utf-8")
+
+    source = _preflight_input_source(
+        {
+            "input": {"catalog_path": str(tmp_path), "catalog_pattern": "*.csv"},
+            "output": {},
+        }
+    )
+
+    assert [len(batch) for batch in source["file_batches"]] == [1, 1, 1]
+
+
+def test_preflight_defaults_to_eight_parquet_metadata_workers(tmp_path, monkeypatch):
+    """Bound concurrent footer access when metadata concurrency is omitted."""
+    pd.DataFrame({"value": [1]}).to_parquet(tmp_path / "part.parq")
+    captured = {}
+
+    class _InlineExecutor:
+        def __init__(self, max_workers):
+            captured["max_workers"] = max_workers
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def map(self, function, values):
+            return map(function, values)
+
+    monkeypatch.setattr("science_catalogs.catalog.ThreadPoolExecutor", _InlineExecutor)
+
+    source = _preflight_input_source(
+        {
+            "input": {"catalog_path": str(tmp_path), "catalog_pattern": "*.parq"},
+            "output": {"target_rows_per_part": 1},
+        }
+    )
+
+    assert captured["max_workers"] == 8
+    assert source["partition_row_counts"] == [1]
+
+
 def test_preflight_does_not_use_source_counts_when_filter_removes_rows(tmp_path, monkeypatch):
     """Fall back to computed processed lengths when filters invalidate footer counts."""
     pd.DataFrame({"keep": [True, False]}).to_parquet(tmp_path / "part.parq")

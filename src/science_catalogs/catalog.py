@@ -31,6 +31,8 @@ from science_catalogs.utils.partitioning import reorder_and_rechunk
 from science_catalogs.utils.writers import write_hats_catalog, write_partitions
 
 logger = logging.getLogger(__name__)
+DEFAULT_FILES_PER_PARTITION = 1
+DEFAULT_PARQUET_METADATA_WORKERS = 8
 
 
 @contextmanager
@@ -252,7 +254,9 @@ def _preflight_input_source(cfg: dict[str, Any]) -> dict[str, Any]:
         return source
 
     input_files = source["input_files"]
-    files_per_partition = int(input_cfg.get("files_per_partition", 32) or 32)
+    files_per_partition = int(
+        input_cfg.get("files_per_partition", DEFAULT_FILES_PER_PARTITION) or DEFAULT_FILES_PER_PARTITION
+    )
     file_batches = _chunk_files(input_files, files_per_partition)
     source["file_batches"] = file_batches
     source["partition_row_counts"] = None
@@ -262,7 +266,10 @@ def _preflight_input_source(cfg: dict[str, Any]) -> dict[str, Any]:
     parquet_suffixes = {".parquet", ".pq", ".parq"}
     all_parquet = all(Path(path).suffix.lower() in parquet_suffixes for path in input_files)
     if needs_counts and all_parquet and _processing_preserves_row_count(input_cfg):
-        metadata_workers = int(input_cfg.get("parquet_metadata_workers", 16) or 16)
+        metadata_workers = int(
+            input_cfg.get("parquet_metadata_workers", DEFAULT_PARQUET_METADATA_WORKERS)
+            or DEFAULT_PARQUET_METADATA_WORKERS
+        )
         logger.info(
             "Reading Parquet row counts for %d files in %d batches (%d metadata threads)",
             len(input_files),
@@ -367,7 +374,10 @@ def prepare_catalog(
     if input_source["source"] == "files":
         input_files = input_source["input_files"]
         file_batches = input_source.get("file_batches") or _chunk_files(
-            input_files, int(inputs.get("files_per_partition", 32) or 32)
+            input_files,
+            int(
+                inputs.get("files_per_partition", DEFAULT_FILES_PER_PARTITION) or DEFAULT_FILES_PER_PARTITION
+            ),
         )
         processed_meta = _build_file_processed_meta(
             input_files[0],
