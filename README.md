@@ -93,8 +93,9 @@ science-catalogs examples/configs/lsst_dp1_to_hats.yml ./output/dp1_hats \
   --output-format hats
 ```
 
-`OUTPUT_DIR` takes precedence over `output.base_path`. When neither is provided,
-the pipeline writes below `./data` in the current working directory. Without
+`OUTPUT_DIR` takes precedence over `output.base_path`. The CLI requires one of these
+destinations to be explicit, preventing large catalogs from accidentally filling the
+current filesystem. The Python API retains `./data` as its fallback. Without
 `--output-format`, the command uses `output.save_as` from the YAML, defaulting to
 Parquet. The CLI format override accepts `parquet` and `hats`; CSV and HDF5 remain
 available through `output.save_as` in the YAML.

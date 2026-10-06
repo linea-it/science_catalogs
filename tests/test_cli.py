@@ -7,8 +7,10 @@ from science_catalogs import cli
 
 def test_cli_routes_progress_logs_to_stdout_and_warnings_to_stderr(monkeypatch, capsys):
     """Route progress logs to stdout while keeping warnings and errors on stderr."""
+    calls = {}
 
-    def fake_build_catalog(config_path, output_dir, output_format=None):
+    def fake_build_catalog(config_path, output_dir, output_format=None, **kwargs):
+        calls.update(kwargs)
         logger = logging.getLogger("science_catalogs.test")
         logger.info("pipeline progress")
         logger.warning("pipeline warning")
@@ -25,12 +27,13 @@ def test_cli_routes_progress_logs_to_stdout_and_warnings_to_stderr(monkeypatch, 
     assert "pipeline progress" not in captured.err
     assert "pipeline warning" in captured.err
     assert "pipeline error" in captured.err
+    assert calls["require_output_path"] is True
 
 
 def test_cli_suppresses_verbose_dependency_info_logs(monkeypatch, capsys):
     """Keep dependency chatter out while preserving dependency warnings."""
 
-    def fake_build_catalog(config_path, output_dir, output_format=None):
+    def fake_build_catalog(config_path, output_dir, output_format=None, **kwargs):
         logging.getLogger("distributed.scheduler").info("scheduler chatter")
         logging.getLogger("distributed.scheduler").warning("scheduler warning")
         return f"{output_dir}/part0.parquet"
@@ -51,7 +54,7 @@ def test_cli_parquet_output(monkeypatch, capsys):
     monkeypatch.setattr(
         cli,
         "build_catalog",
-        lambda config_path, output_dir, output_format=None: (
+        lambda config_path, output_dir, output_format=None, **kwargs: (
             f"{output_dir}/part0.parquet",
             f"{output_dir}/part1.parquet",
         ),
@@ -71,7 +74,7 @@ def test_cli_hats_output(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(
         cli,
         "build_catalog",
-        lambda config_path, output_dir, output_format=None: f"{output_dir}/demo_collection",
+        lambda config_path, output_dir, output_format=None, **kwargs: f"{output_dir}/demo_collection",
     )
     monkeypatch.setattr(
         "sys.argv",
@@ -88,7 +91,7 @@ def test_cli_batch_output(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(
         cli,
         "build_catalog",
-        lambda config_path, output_dir, output_format=None: {
+        lambda config_path, output_dir, output_format=None, **kwargs: {
             "object": f"{output_dir}/object_collection",
             "source": f"{output_dir}/source_collection",
         },

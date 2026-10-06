@@ -219,6 +219,31 @@ def test_normalize_catalog_config_rejects_invalid_hats_partitioning_options(key,
         normalize_catalog_config({"collection": {"catalog": {key: value}}})
 
 
+def test_normalize_catalog_config_requires_explicit_slurm_resources():
+    """Reject SLURM execution that depends on site-specific resource defaults."""
+    with pytest.raises(ValueError, match="cores, processes, memory, walltime"):
+        normalize_catalog_config({"execution": {"executor": "slurm", "slurm": {}}})
+
+
+def test_normalize_catalog_config_accepts_complete_slurm_resources():
+    """Accept a SLURM executor whose principal resource limits are explicit."""
+    config = normalize_catalog_config(
+        {
+            "execution": {
+                "executor": "slurm",
+                "slurm": {
+                    "cores": 1,
+                    "processes": 1,
+                    "memory": "48GB",
+                    "walltime": "01:00:00",
+                },
+            }
+        }
+    )
+
+    assert config["execution"]["slurm"]["memory"] == "48GB"
+
+
 def test_resolve_nested_invalid_handling_preserves_all_operations():
     """Map nested value/error policies to every existing processing feature."""
     resolved = resolve_invalid_handling(

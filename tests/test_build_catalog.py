@@ -14,6 +14,8 @@ class _FakeCluster:
 
 
 class _FakeClient:
+    last_waited_for = None
+
     def __init__(self, cluster):
         self.cluster = cluster
         self.closed = False
@@ -23,6 +25,7 @@ class _FakeClient:
 
     def wait_for_workers(self, n_workers, timeout=None):
         self.waited_for = (n_workers, timeout)
+        type(self).last_waited_for = self.waited_for
 
     def close(self):
         self.closed = True
@@ -83,6 +86,7 @@ def test_build_catalog_writes_parquet(monkeypatch):
     assert calls["prepare_client"] is not None
     assert calls["output_dir"] == "/tmp/out"
     assert calls["output_format"] == "parquet"
+    assert _FakeClient.last_waited_for == (1, 900)
 
 
 def test_build_catalog_defaults_to_cwd_data(monkeypatch, tmp_path):
@@ -114,6 +118,36 @@ def test_build_catalog_defaults_to_cwd_data(monkeypatch, tmp_path):
     assert captured["prepare_client"] is not None
     assert captured["output_dir"] == expected
     assert captured["output_format"] is None
+
+
+def test_build_catalog_can_require_explicit_output_destination(monkeypatch):
+    """Let CLI callers reject an accidental multi-terabyte write below the CWD."""
+    _patch_single_plan(monkeypatch)
+
+    import pytest
+
+    with pytest.raises(ValueError, match="explicit output destination"):
+        build_catalog("config.yml", require_output_path=True)
+
+
+def test_build_catalog_accepts_configured_output_destination(monkeypatch):
+    """Treat output.base_path as an explicit destination for CLI builds."""
+    _patch_runtime(monkeypatch)
+    prepared = _Prepared()
+    prepared.output_cfg["base_path"] = "/configured/out"
+    _patch_single_plan(monkeypatch, {"execution": {}, "output": {"base_path": "/configured/out"}})
+    monkeypatch.setattr(
+        "science_catalogs.catalog.prepare_catalog",
+        lambda path, config=None, client=None, input_source=None: prepared,
+    )
+    monkeypatch.setattr(
+        "science_catalogs.catalog.write_catalog",
+        lambda prepared, output_dir, client=None, output_format=None: (f"{output_dir}/part.parquet",),
+    )
+
+    result = build_catalog("config.yml", require_output_path=True)
+
+    assert result == "/configured/out/part.parquet"
 
 
 def test_build_catalog_writes_hats(monkeypatch):

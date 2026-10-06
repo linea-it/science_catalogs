@@ -74,6 +74,37 @@ def test_resolve_input_source_requires_catalog_path():
         _resolve_input_source({})
 
 
+def test_prepare_catalog_disables_legacy_photometry_transforms_by_default(monkeypatch, tmp_path):
+    """Require legacy magnitude and dereddening transformations to be explicit opt-ins."""
+    input_path = tmp_path / "input.csv"
+    input_path.write_text("ra,dec\n10.0,-20.0\n", encoding="utf-8")
+    captured = {}
+
+    def fake_decide(input_cfg, compute_mag, compute_dered, dust_cfg):
+        captured["flags"] = (compute_mag, compute_dered)
+        return "_demo", False, False, False
+
+    monkeypatch.setattr("science_catalogs.catalog.decide_suffix_and_flags", fake_decide)
+    monkeypatch.setattr("science_catalogs.catalog.configure_dustmaps_path", lambda dust, client=None: None)
+    monkeypatch.setattr("science_catalogs.catalog.reorder_and_rechunk", lambda ddf, output_cfg, **kwargs: ddf)
+
+    prepared = prepare_catalog(
+        "unused.yml",
+        config={
+            "input": {
+                "catalog_path": str(input_path),
+                "user_selected_cols": ["ra", "dec"],
+                "ra_col": "ra",
+                "dec_col": "dec",
+            },
+            "output": {},
+        },
+    )
+
+    assert captured["flags"] == (False, False)
+    assert prepared.ddf.compute().to_dict("records") == [{"ra": 10.0, "dec": -20.0}]
+
+
 def test_preflight_batches_files_and_reads_parquet_footer_counts(tmp_path):
     """Build a compact graph and exact partition sizes without reading table data."""
     for index in range(5):
@@ -413,7 +444,7 @@ def test_prepare_catalog_reads_hats_input(monkeypatch, tmp_path):
     assert len(result) == 2
 
 
-def test_prepare_catalog_reads_all_hats_columns_by_default(monkeypatch, tmp_path):
+def test_prepare_catalog_reads_all_hats_columns_by_default(monkeypatch, tmp_path, caplog):
     """Request all HATS columns when no explicit column selection is configured."""
     hats_path = tmp_path / "demo_hats_catalog"
     hats_path.mkdir()
@@ -456,11 +487,14 @@ def test_prepare_catalog_reads_all_hats_columns_by_default(monkeypatch, tmp_path
 
     monkeypatch.setattr("science_catalogs.catalog.open_lsdb_catalog", fake_open_lsdb_catalog)
 
-    prepared = prepare_catalog("unused.yml", config=cfg)
+    with caplog.at_level("WARNING"):
+        prepared = prepare_catalog("unused.yml", config=cfg)
     result = prepared.ddf.compute()
 
     assert calls["columns"] == "all"
     assert list(result.columns) == ["ra", "dec", "value"]
+    assert "will read every column" in caplog.text
+    assert "very high memory use" in caplog.text
 
 
 def test_prepare_catalog_uses_programmatic_config_on_file_workers(tmp_path):

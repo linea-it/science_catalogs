@@ -75,6 +75,7 @@ def main():
         args.config_path,
         output_dir=args.output_dir,
         output_format=args.output_format,
+        require_output_path=True,
     )
 
     if isinstance(result, dict):

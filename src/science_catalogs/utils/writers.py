@@ -158,7 +158,7 @@ def write_hats_catalog(
     if not ra_col or not dec_col:
         raise ValueError("HATS output requires both ra_col and dec_col")
 
-    on_existing = "replace" if force_recreate else output_cfg.get("on_existing", "reuse")
+    on_existing = "replace" if force_recreate else output_cfg.get("on_existing", "error")
     if on_existing not in {"reuse", "error", "replace"}:
         raise ValueError("output.on_existing must be 'reuse', 'error', or 'replace'")
 
@@ -174,7 +174,7 @@ def write_hats_catalog(
     margin_cfg = collection_cfg.get("margin", {})
     margin_threshold = output_cfg.get("hats_margin_threshold")
     if margin_threshold is None:
-        margin_threshold = margin_cfg.get("threshold_arcsec", collection_cfg.get("margin_threshold", 10.0))
+        margin_threshold = margin_cfg.get("threshold_arcsec", collection_cfg.get("margin_threshold", 5.0))
     index_cfgs = collection_cfg.get("indexes", []) or []
     if not isinstance(index_cfgs, list):
         raise ValueError("collection.indexes must be a list")

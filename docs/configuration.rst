@@ -97,7 +97,9 @@ Older configurations remain readable and emit ``ConfigDeprecationWarning``. The 
 aliases are ``input.catalog_folder`` to ``input.catalog_path``, ``input.which_release``
 to ``metadata.release``, ``cluster`` to ``execution``, and the old flat invalid-handling
 keys to the nested value/error policy. New configurations should use only the canonical
-layout.
+layout. In legacy configurations, magnitude conversion and dereddening both default to
+disabled and must be enabled explicitly. Canonical configurations express the requested
+conversion through each measurement's input and output types.
 
 HATS partitioning
 ----------------------------------------------------------------------------------------
@@ -124,10 +126,19 @@ filter or initial cut is enabled.
 ``input.parquet_metadata_workers`` controls the bounded footer-reading thread pool
 (default 8).
 
+When ``input.user_selected_cols`` is omitted, every source column is intentionally
+read. The pipeline emits a warning because this can substantially increase peak memory
+for wide catalogs.
+
 For SLURM, ``execution.slurm.death_timeout`` controls how long a worker may take to
 connect to the scheduler (default 600 seconds). ``execution.worker_wait_timeout``
-optionally bounds how long the client waits for every requested worker to register;
-without it, the client waits indefinitely.
+bounds how long the client waits for every requested worker to register (default 900
+seconds). ``cores``, ``processes``, ``memory``, and ``walltime`` must be provided
+explicitly for SLURM execution. Local execution defaults to one worker process with one
+thread; increase either value explicitly when the workload and available memory permit.
+
+HATS output always includes a default margin catalog. Its default threshold is 5
+arcseconds and may be overridden with ``collection.margin.threshold_arcsec``.
 
 .. code-block:: yaml
 
@@ -198,9 +209,9 @@ storage roots while still sharing an executor.
              artifact_name: source
 
 ``execution`` belongs to the batch because all entries share one cluster. HATS artifact
-names and catalog names must be unique. The ``on_existing`` policy is ``error`` by
-default for batches and may be set to ``reuse`` or ``replace``. Single-catalog configs
-retain the historical ``reuse`` default. Recursive patterns such as ``**/*.parq`` allow
+names and catalog names must be unique. For HATS output, the ``on_existing`` policy is
+``error`` by default for both batch and single-catalog builds and may be set to ``reuse``
+or ``replace`` explicitly. Recursive patterns such as ``**/*.parq`` allow
 one logical catalog to include band directories while preserving the band column.
 Non-HATS batch outputs are placed in a subdirectory named after each catalog so that
 partition filenames from different entries cannot collide.

@@ -356,6 +356,12 @@ def prepare_catalog(
     dust = cfg.get("dust", {})
     output_cfg = cfg.get("output", {})
 
+    if not list(inputs.get("user_selected_cols", []) or []):
+        logger.warning(
+            "No input.user_selected_cols was configured; the pipeline will read every "
+            "column. This can cause very high memory use for wide catalogs."
+        )
+
     configure_dustmaps_path(dust, client=client)
 
     if "photometry" in cfg:
@@ -364,8 +370,8 @@ def prepare_catalog(
     else:
         suffix, will_mag, will_dered_flux, will_dered_mag = decide_suffix_and_flags(
             inputs,
-            inputs.get("compute_magnitude", True),
-            inputs.get("compute_dereddening", True),
+            inputs.get("compute_magnitude", False),
+            inputs.get("compute_dereddening", False),
             dust,
         )
 
@@ -584,16 +590,30 @@ def build_catalog(
     *,
     output_dir: str | None = None,
     output_format: str | None = None,
+    require_output_path: bool = False,
 ) -> str | tuple[str, ...] | dict[str, str | tuple[str, ...]]:
     """
     Execute the full catalog-building flow and persist the result to disk.
 
-    When `output_dir` is omitted, the default output directory is `./data`.
+    When `output_dir` is omitted, the Python API defaults to `./data`. Set
+    `require_output_path=True` to require either `output_dir` or
+    `output.base_path`, as the command-line interface does.
     The returned value is the written parquet partition paths, or the HATS
     artifact directory when `output_format="hats"`.
     """
     logger.info("[1/5] Loading configuration: %s", config_path)
     plan = load_build_plan(config_path)
+    if require_output_path and output_dir is None:
+        missing = [
+            spec.name or "catalog"
+            for spec in plan.catalogs
+            if not spec.config.get("output", {}).get("base_path")
+        ]
+        if missing:
+            raise ValueError(
+                "An explicit output destination is required. Pass OUTPUT_DIR or configure "
+                "output.base_path for: " + ", ".join(missing)
+            )
     resolved_sources = []
     for index, spec in enumerate(plan.catalogs, start=1):
         label = spec.name or "catalog"
@@ -618,7 +638,7 @@ def build_catalog(
 
     try:
         expected_workers = _expected_worker_count(execution_cfg, cluster)
-        worker_wait_timeout = execution_cfg.get("worker_wait_timeout")
+        worker_wait_timeout = execution_cfg.get("worker_wait_timeout", 900)
         logger.info("Waiting for %d Dask worker(s) to become ready", expected_workers)
         client.wait_for_workers(expected_workers, timeout=worker_wait_timeout)
         logger.info("Dask executor is ready with %d worker(s)", expected_workers)

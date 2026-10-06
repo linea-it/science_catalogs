@@ -14,6 +14,9 @@ def get_executor(executor_cfg: dict[str, Any]):
 
     if name == "local":
         args = dict(executor_cfg.get("local", {}))
+        args.setdefault("n_workers", 1)
+        args.setdefault("threads_per_worker", 1)
+        args.setdefault("processes", True)
         args.setdefault("dashboard_address", None)
         logger.info("Creating LocalCluster with %s", args)
         cluster = LocalCluster(**args)
@@ -21,6 +24,10 @@ def get_executor(executor_cfg: dict[str, Any]):
 
     if name == "slurm":
         args = dict(executor_cfg.get("slurm", {}))
+        required = ("cores", "processes", "memory", "walltime")
+        missing = [key for key in required if args.get(key) in (None, "")]
+        if missing:
+            raise ValueError("SLURM execution requires explicit values for: " + ", ".join(missing))
         scheduler_options = dict(args.get("scheduler_options", {}) or {})
         scheduler_options.setdefault("dashboard_address", args.get("dashboard_address"))
         job_extra_directives = args.get("job_extra_directives", []) or []

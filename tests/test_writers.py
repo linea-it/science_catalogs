@@ -68,7 +68,7 @@ def test_write_hats_catalog_marks_margin_as_default(monkeypatch, tmp_path, isola
     writers.write_hats_catalog(
         pd.DataFrame({"ra": [1.0], "dec": [2.0]}),
         {"save_as": "hats", "hats_artifact_name": "demo"},
-        {"margin_threshold": 5.0},
+        {},
         str(tmp_path),
         "_demo",
         "ra",
@@ -306,7 +306,7 @@ def test_write_hats_catalog_preserves_staging_when_client_cannot_close(monkeypat
     shutil.rmtree(staging_dirs[0])
 
 
-def test_write_hats_catalog_reuses_existing_collection(monkeypatch, tmp_path):
+def test_write_hats_catalog_reuses_existing_collection_when_requested(monkeypatch, tmp_path):
     """Detect existing HATS collections without invoking staging or import."""
     monkeypatch.setitem(
         sys.modules,
@@ -321,7 +321,7 @@ def test_write_hats_catalog_reuses_existing_collection(monkeypatch, tmp_path):
 
     result = writers.write_hats_catalog(
         pd.DataFrame({"ra": [1.0], "dec": [2.0]}),
-        {"save_as": "hats", "hats_artifact_name": "demo"},
+        {"save_as": "hats", "hats_artifact_name": "demo", "on_existing": "reuse"},
         {"margin_threshold": 5.0},
         str(tmp_path),
         "_demo",
@@ -331,6 +331,29 @@ def test_write_hats_catalog_reuses_existing_collection(monkeypatch, tmp_path):
     )
 
     assert result == (str(tmp_path / "demo"),)
+
+
+def test_write_hats_catalog_rejects_existing_collection_by_default(monkeypatch, tmp_path):
+    """Avoid silently reusing stale output when no policy is configured."""
+    import pytest
+
+    monkeypatch.setitem(
+        sys.modules,
+        "hats.io.validation",
+        types.SimpleNamespace(is_valid_collection=lambda path: True),
+    )
+
+    with pytest.raises(FileExistsError, match="demo"):
+        writers.write_hats_catalog(
+            pd.DataFrame({"ra": [1.0], "dec": [2.0]}),
+            {"save_as": "hats", "hats_artifact_name": "demo"},
+            {},
+            str(tmp_path),
+            "_demo",
+            "ra",
+            "dec",
+            client="fake_client",
+        )
 
 
 def test_write_hats_catalog_can_reject_existing_collection(monkeypatch, tmp_path):

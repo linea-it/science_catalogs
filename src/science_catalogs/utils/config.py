@@ -115,6 +115,26 @@ def _warn_alias(old: str, new: str, enabled: bool) -> None:
         )
 
 
+def _validate_execution(execution: dict[str, Any], path: str) -> None:
+    """Validate conservative runtime requirements for local and SLURM executors."""
+    _reject_unknown(execution, {"executor", "local", "slurm", "worker_wait_timeout"}, path)
+    executor = execution.get("executor", "local")
+    if executor not in {"local", "slurm"}:
+        raise ValueError(f"{path}.executor must be 'local' or 'slurm'")
+    _mapping(execution.get("local"), f"{path}.local")
+    slurm = _mapping(execution.get("slurm"), f"{path}.slurm")
+    timeout = execution.get("worker_wait_timeout")
+    if timeout is not None and (
+        isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0
+    ):
+        raise ValueError(f"{path}.worker_wait_timeout must be a positive number")
+    if executor == "slurm":
+        required = ("cores", "processes", "memory", "walltime")
+        missing = [key for key in required if slurm.get(key) in (None, "")]
+        if missing:
+            raise ValueError(f"{path}.slurm requires explicit values for: " + ", ".join(missing))
+
+
 def _validate_invalid_handling(invalid: dict[str, Any], path: str) -> None:
     canonical_keys = {"enabled", "value", "error", "cross_invalidate"}
     has_canonical = bool(set(invalid) & {"enabled", "value", "error"})
@@ -269,7 +289,7 @@ def validate_catalog_config(cfg: dict[str, Any]) -> None:
     _reject_unknown(output, _OUTPUT_KEYS, "output")
     if output.get("save_as", "parquet") not in {"parquet", "csv", "hdf5", "hats"}:
         raise ValueError("output.save_as must be 'parquet', 'csv', 'hdf5', or 'hats'")
-    if output.get("on_existing", "reuse") not in {"reuse", "error", "replace"}:
+    if output.get("on_existing", "error") not in {"reuse", "error", "replace"}:
         raise ValueError("output.on_existing must be 'reuse', 'error', or 'replace'")
     target_rows = output.get("target_rows_per_part")
     if target_rows not in (None, False) and (
@@ -325,21 +345,9 @@ def validate_catalog_config(cfg: dict[str, Any]) -> None:
         )
 
     execution = _mapping(cfg.get("execution"), "execution")
-    _reject_unknown(execution, {"executor", "local", "slurm", "worker_wait_timeout"}, "execution")
-    if execution.get("executor", "local") not in {"local", "slurm"}:
-        raise ValueError("execution.executor must be 'local' or 'slurm'")
-    _mapping(execution.get("local"), "execution.local")
-    _mapping(execution.get("slurm"), "execution.slurm")
+    _validate_execution(execution, "execution")
     legacy_execution = _mapping(cfg.get("cluster"), "cluster")
-    _reject_unknown(
-        legacy_execution,
-        {"executor", "local", "slurm", "worker_wait_timeout"},
-        "cluster",
-    )
-    if legacy_execution.get("executor", "local") not in {"local", "slurm"}:
-        raise ValueError("cluster.executor must be 'local' or 'slurm'")
-    _mapping(legacy_execution.get("local"), "cluster.local")
-    _mapping(legacy_execution.get("slurm"), "cluster.slurm")
+    _validate_execution(legacy_execution, "cluster")
 
     if "invalid_handling" in cfg:
         _validate_invalid_handling(
