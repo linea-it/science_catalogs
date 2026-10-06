@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from science_catalogs.catalog import _resolve_input_source, load_build_plan
+from science_catalogs.catalog import _resolve_input_source, load_build_plan, load_catalog_config
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LARGE_DP2_CATALOGS = {
@@ -13,6 +13,11 @@ LARGE_DP2_CATALOGS = {
     "dia_source",
     "object_forced_source",
     "object_shear_all",
+    "source",
+}
+MANY_FILE_DP2_CATALOGS = {
+    "dia_object_forced_source",
+    "object_forced_source",
     "source",
 }
 
@@ -33,6 +38,19 @@ def test_dp2_large_individual_catalogs_limit_staging_tasks():
         config = configs[name]
         assert config["output"]["target_rows_per_part"] == 1_000_000
         assert config["collection"]["catalog"]["highest_healpix_order"] == 12
+
+
+def test_dp2_many_file_individual_catalogs_use_scalable_preflight():
+    """Keep individual high-file-count configs aligned with robust SLURM startup."""
+    individual_dir = REPO_ROOT / "examples/configs/dp2/individual"
+    for name in MANY_FILE_DP2_CATALOGS:
+        config_path = individual_dir / f"lsst_dp2_{name}_to_hats.yml"
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+
+        assert config["input"]["files_per_partition"] == 32
+        assert config["input"]["parquet_metadata_workers"] == 16
+        assert config["execution"]["worker_wait_timeout"] == 900
+        assert config["execution"]["slurm"]["death_timeout"] == 600
 
 
 def test_dp2_batch_contains_all_positional_non_solar_catalogs():
@@ -62,6 +80,15 @@ def test_dp2_batch_contains_all_positional_non_solar_catalogs():
         "visit_detector_table": ("ra", "dec"),
     }
     assert configs["source"]["input"]["catalog_pattern"] == "**/*.parq"
+    for name, cfg in configs.items():
+        if name in MANY_FILE_DP2_CATALOGS:
+            assert cfg["input"]["files_per_partition"] == 32
+            assert cfg["input"]["parquet_metadata_workers"] == 16
+        else:
+            assert "files_per_partition" not in cfg["input"]
+            assert "parquet_metadata_workers" not in cfg["input"]
+    assert plan.execution_cfg["worker_wait_timeout"] == 900
+    assert plan.execution_cfg["slurm"]["death_timeout"] == 600
     assert configs["object"]["photometry"]["enabled"] is True
     assert len(configs["object"]["photometry"]["measurements"]) == 2
     assert configs["dia_object"]["collection"]["indexes"] == [
@@ -86,6 +113,16 @@ def test_dp2_batch_contains_all_positional_non_solar_catalogs():
         root = f"<path-to-data-on-{storage}>"
         assert config["input"]["catalog_path"] == f"{root}/primary/catalogs/{name}"
         assert config["output"]["base_path"] == f"{root}/secondary/catalogs"
+
+
+def test_dp2_individual_configs_exactly_match_batch_catalogs():
+    """Prevent individual and batch execution paths from silently diverging."""
+    individual_dir = REPO_ROOT / "examples/configs/dp2/individual"
+    plan = load_build_plan(str(REPO_ROOT / "examples/configs/dp2/all/lsst_dp2_to_hats.yml"))
+
+    for spec in plan.catalogs:
+        individual = load_catalog_config(str(individual_dir / f"lsst_dp2_{spec.name}_to_hats.yml"))
+        assert individual == spec.config, spec.name
 
 
 def test_batch_defaults_are_deep_merged(tmp_path):

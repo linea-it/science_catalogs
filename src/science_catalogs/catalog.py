@@ -7,6 +7,7 @@ import glob
 import logging
 import re
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
@@ -18,7 +19,7 @@ from dask import delayed
 from dask.distributed import Client, wait
 
 from science_catalogs.executor import get_executor
-from science_catalogs.processing import process_dataframe, process_file_df
+from science_catalogs.processing import process_dataframe, process_files_df
 from science_catalogs.utils.config import (
     decide_photometry_suffix,
     decide_suffix_and_flags,
@@ -221,6 +222,76 @@ def _resolve_input_source(inputs: dict[str, Any]) -> dict[str, Any]:
     raise ValueError(f"Unsupported input path type: {catalog_path}")
 
 
+def _chunk_files(input_files: list[str], files_per_partition: int) -> list[tuple[str, ...]]:
+    """Group source files so the task graph does not contain one task per small file."""
+    return [
+        tuple(input_files[offset : offset + files_per_partition])
+        for offset in range(0, len(input_files), files_per_partition)
+    ]
+
+
+def _processing_preserves_row_count(input_cfg: dict[str, Any]) -> bool:
+    """Return whether configured processing can use exact source-file row counts."""
+    return not input_cfg.get("filter", {}).get("enabled") and not input_cfg.get("initial_cut", {}).get(
+        "enabled"
+    )
+
+
+def _parquet_batch_row_count(paths: tuple[str, ...]) -> int:
+    """Read only Parquet footers and return the total rows for one file batch."""
+    import pyarrow.parquet as pq
+
+    return sum(pq.read_metadata(path).num_rows for path in paths)
+
+
+def _preflight_input_source(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Discover, batch, and inspect inputs before a distributed scheduler exists."""
+    input_cfg = cfg.get("input", {})
+    source = _resolve_input_source(input_cfg)
+    if source["source"] != "files":
+        return source
+
+    input_files = source["input_files"]
+    files_per_partition = int(input_cfg.get("files_per_partition", 32) or 32)
+    file_batches = _chunk_files(input_files, files_per_partition)
+    source["file_batches"] = file_batches
+    source["partition_row_counts"] = None
+
+    output_cfg = cfg.get("output", {})
+    needs_counts = output_cfg.get("target_rows_per_part") not in (None, False)
+    parquet_suffixes = {".parquet", ".pq", ".parq"}
+    all_parquet = all(Path(path).suffix.lower() in parquet_suffixes for path in input_files)
+    if needs_counts and all_parquet and _processing_preserves_row_count(input_cfg):
+        metadata_workers = int(input_cfg.get("parquet_metadata_workers", 16) or 16)
+        logger.info(
+            "Reading Parquet row counts for %d files in %d batches (%d metadata threads)",
+            len(input_files),
+            len(file_batches),
+            metadata_workers,
+        )
+        try:
+            with ThreadPoolExecutor(max_workers=metadata_workers) as executor:
+                source["partition_row_counts"] = list(executor.map(_parquet_batch_row_count, file_batches))
+            total_rows = sum(source["partition_row_counts"])
+            logger.info(
+                "Read %s total rows from Parquet metadata without scanning table data",
+                f"{total_rows:,}",
+            )
+        except Exception:
+            logger.warning(
+                "Could not read all Parquet row counts from metadata; falling back to a data scan",
+                exc_info=True,
+            )
+            source["partition_row_counts"] = None
+
+    logger.info(
+        "Discovered %d input files grouped into %d Dask partitions",
+        len(input_files),
+        len(file_batches),
+    )
+    return source
+
+
 def _build_processed_meta(
     ddf: dd.DataFrame,
     cfg: dict[str, Any],
@@ -269,6 +340,7 @@ def prepare_catalog(
     config: dict[str, Any] | None = None,
     *,
     client=None,
+    input_source: dict[str, Any] | None = None,
 ) -> PreparedCatalog:
     """Build the lazy processed catalog from file inputs or an existing HATS catalog."""
     cfg = normalize_catalog_config(config) if config is not None else load_catalog_config(config_path)
@@ -290,10 +362,13 @@ def prepare_catalog(
             dust,
         )
 
-    input_source = _resolve_input_source(inputs)
+    input_source = input_source or _preflight_input_source(cfg)
 
     if input_source["source"] == "files":
         input_files = input_source["input_files"]
+        file_batches = input_source.get("file_batches") or _chunk_files(
+            input_files, int(inputs.get("files_per_partition", 32) or 32)
+        )
         processed_meta = _build_file_processed_meta(
             input_files[0],
             cfg,
@@ -302,8 +377,8 @@ def prepare_catalog(
             will_dered_mag=will_dered_mag,
         )
         delayed_dfs = [
-            delayed(process_file_df)(
-                p,
+            delayed(process_files_df)(
+                paths,
                 cfg_path=cfg,
                 will_mag=will_mag,
                 will_dered_flux=will_dered_flux,
@@ -311,7 +386,7 @@ def prepare_catalog(
                 output_columns=tuple(processed_meta.columns),
                 output_dtypes=processed_meta.dtypes.to_dict(),
             )
-            for p in input_files
+            for paths in file_batches
         ]
         ddf = dd.from_delayed(delayed_dfs, meta=processed_meta)
     else:
@@ -338,7 +413,11 @@ def prepare_catalog(
             ),
         )
         ddf = processed_catalog.to_dask_dataframe().clear_divisions()
-    ddf_out = reorder_and_rechunk(ddf, output_cfg)
+    ddf_out = reorder_and_rechunk(
+        ddf,
+        output_cfg,
+        partition_row_counts=input_source.get("partition_row_counts"),
+    )
 
     return PreparedCatalog(
         config=cfg,
@@ -470,6 +549,26 @@ def _resolve_output_dir(
     return str(Path.cwd() / "data")
 
 
+def _expected_worker_count(execution_cfg: dict[str, Any], cluster) -> int:
+    """Resolve how many worker processes must register before preparation starts."""
+    executor_name = execution_cfg.get("executor", "local")
+    if executor_name == "slurm":
+        slurm_cfg = execution_cfg.get("slurm", {})
+        jobs = int(slurm_cfg.get("dask_scale_number", 1) or 1)
+        dummy_job = getattr(cluster, "_dummy_job", None)
+        processes = getattr(dummy_job, "worker_processes", None)
+        if processes is None:
+            processes = int(slurm_cfg.get("processes", 1) or 1)
+        return jobs * int(processes)
+
+    local_cfg = execution_cfg.get("local", {})
+    configured = local_cfg.get("n_workers")
+    if configured is not None:
+        return int(configured)
+    worker_spec = getattr(cluster, "worker_spec", None)
+    return len(worker_spec) if worker_spec else 1
+
+
 def build_catalog(
     config_path: str,
     *,
@@ -485,30 +584,42 @@ def build_catalog(
     """
     logger.info("[1/5] Loading configuration: %s", config_path)
     plan = load_build_plan(config_path)
+    resolved_sources = []
+    for index, spec in enumerate(plan.catalogs, start=1):
+        label = spec.name or "catalog"
+        logger.info(
+            "Preflighting input catalog %d/%d before scheduler startup: %s",
+            index,
+            len(plan.catalogs),
+            label,
+        )
+        resolved_sources.append(_preflight_input_source(spec.config))
+
     execution_cfg = plan.execution_cfg
     executor_name = execution_cfg.get("executor", "local")
     if executor_name == "slurm":
-        worker_count = int(execution_cfg.get("slurm", {}).get("dask_scale_number", 1) or 1)
-        logger.info("[2/5] Starting Dask executor: SLURM (%d workers)", worker_count)
+        job_count = int(execution_cfg.get("slurm", {}).get("dask_scale_number", 1) or 1)
+        logger.info("[2/5] Starting Dask executor: SLURM (%d jobs)", job_count)
     else:
         logger.info("[2/5] Starting Dask executor: %s", executor_name)
 
     cluster = get_executor(execution_cfg)
     client = Client(cluster)
-    cluster_ref = client.cluster
-    cluster_comm = getattr(cluster_ref, "comm", None)
 
     try:
-        logger.info("Waiting for Dask workers to become ready")
-        if cluster_comm:
-            wait(cluster_comm)
-        logger.info("Dask executor is ready")
+        expected_workers = _expected_worker_count(execution_cfg, cluster)
+        worker_wait_timeout = execution_cfg.get("worker_wait_timeout")
+        logger.info("Waiting for %d Dask worker(s) to become ready", expected_workers)
+        client.wait_for_workers(expected_workers, timeout=worker_wait_timeout)
+        logger.info("Dask executor is ready with %d worker(s)", expected_workers)
         client.run(lambda: gc.collect())
 
         results = {}
         single_result = None
         with _suppress_dask_large_graph_warning():
-            for index, spec in enumerate(plan.catalogs, start=1):
+            for index, (spec, input_source) in enumerate(
+                zip(plan.catalogs, resolved_sources, strict=True), start=1
+            ):
                 label = spec.name or "catalog"
                 logger.info(
                     "[3/5] Preparing input catalog %d/%d: %s",
@@ -518,7 +629,12 @@ def build_catalog(
                 )
                 prepared = None
                 try:
-                    prepared = prepare_catalog(config_path, config=spec.config, client=client)
+                    prepared = prepare_catalog(
+                        config_path,
+                        config=spec.config,
+                        client=client,
+                        input_source=input_source,
+                    )
                     logger.info(
                         "Prepared %d input files in %d partitions",
                         len(prepared.input_files),

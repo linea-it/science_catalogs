@@ -32,6 +32,7 @@ def get_executor(executor_cfg: dict[str, Any]):
             processes=args.get("processes"),
             memory=args.get("memory"),
             walltime=args.get("walltime"),
+            death_timeout=args.get("death_timeout", 600),
             scheduler_options=scheduler_options,
             job_extra_directives=job_extra_directives,
         )

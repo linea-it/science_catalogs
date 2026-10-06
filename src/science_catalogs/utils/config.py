@@ -28,6 +28,8 @@ _TOP_LEVEL_KEYS = {
 _INPUT_KEYS = {
     "catalog_path",
     "catalog_pattern",
+    "files_per_partition",
+    "parquet_metadata_workers",
     "user_selected_cols",
     "is_id_in_index",
     "ra_col",
@@ -201,6 +203,10 @@ def validate_catalog_config(cfg: dict[str, Any]) -> None:
             raise ValueError("input.initial_cut requires exactly one of mag_value or flux_value")
     if filt.get("enabled") and not filt.get("column"):
         raise ValueError("input.filter.column is required when the filter is enabled")
+    for key in ("files_per_partition", "parquet_metadata_workers"):
+        value = input_cfg.get(key)
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value <= 0):
+            raise ValueError(f"input.{key} must be a positive integer")
 
     photometry = cfg.get("photometry")
     if photometry is not None:
@@ -319,13 +325,17 @@ def validate_catalog_config(cfg: dict[str, Any]) -> None:
         )
 
     execution = _mapping(cfg.get("execution"), "execution")
-    _reject_unknown(execution, {"executor", "local", "slurm"}, "execution")
+    _reject_unknown(execution, {"executor", "local", "slurm", "worker_wait_timeout"}, "execution")
     if execution.get("executor", "local") not in {"local", "slurm"}:
         raise ValueError("execution.executor must be 'local' or 'slurm'")
     _mapping(execution.get("local"), "execution.local")
     _mapping(execution.get("slurm"), "execution.slurm")
     legacy_execution = _mapping(cfg.get("cluster"), "cluster")
-    _reject_unknown(legacy_execution, {"executor", "local", "slurm"}, "cluster")
+    _reject_unknown(
+        legacy_execution,
+        {"executor", "local", "slurm", "worker_wait_timeout"},
+        "cluster",
+    )
     if legacy_execution.get("executor", "local") not in {"local", "slurm"}:
         raise ValueError("cluster.executor must be 'local' or 'slurm'")
     _mapping(legacy_execution.get("local"), "cluster.local")

@@ -37,6 +37,7 @@ def test_get_slurm_executor_disables_dashboard_by_default(monkeypatch):
     assert isinstance(cluster, _FakeSlurmCluster)
     assert captured["scheduler_options"]["dashboard_address"] is None
     assert captured["scale_jobs"] == 3
+    assert captured["death_timeout"] == 600
 
 
 def test_get_slurm_executor_keeps_explicit_dashboard_address(monkeypatch):
@@ -55,3 +56,21 @@ def test_get_slurm_executor_keeps_explicit_dashboard_address(monkeypatch):
     get_executor({"executor": "slurm", "slurm": {"dashboard_address": ":8787"}})
 
     assert captured["scheduler_options"]["dashboard_address"] == ":8787"
+
+
+def test_get_slurm_executor_keeps_explicit_death_timeout(monkeypatch):
+    """Allow large filesystem preflight runs to tune worker connection timeouts."""
+    captured = {}
+
+    class _FakeSlurmCluster:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def scale(self, jobs):
+            pass
+
+    monkeypatch.setattr("science_catalogs.executor.SLURMCluster", _FakeSlurmCluster)
+
+    get_executor({"executor": "slurm", "slurm": {"death_timeout": 1200}})
+
+    assert captured["death_timeout"] == 1200

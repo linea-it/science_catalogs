@@ -21,6 +21,9 @@ class _FakeClient:
     def run(self, func):
         func()
 
+    def wait_for_workers(self, n_workers, timeout=None):
+        self.waited_for = (n_workers, timeout)
+
     def close(self):
         self.closed = True
 
@@ -37,6 +40,10 @@ def _patch_runtime(monkeypatch):
     """Patch the runtime pieces that would start a real Dask cluster."""
     monkeypatch.setattr("science_catalogs.catalog.get_executor", lambda cfg: _FakeCluster())
     monkeypatch.setattr("science_catalogs.catalog.Client", _FakeClient)
+    monkeypatch.setattr(
+        "science_catalogs.catalog._preflight_input_source",
+        lambda cfg: {"source": "files", "input_files": ["input.parquet"]},
+    )
 
 
 def _patch_single_plan(monkeypatch, config=None):
@@ -57,7 +64,7 @@ def test_build_catalog_writes_parquet(monkeypatch):
 
     _patch_single_plan(monkeypatch)
 
-    def fake_prepare_catalog(path, config=None, client=None):
+    def fake_prepare_catalog(path, config=None, client=None, input_source=None):
         calls["prepare_client"] = client
         return prepared
 
@@ -86,7 +93,7 @@ def test_build_catalog_defaults_to_cwd_data(monkeypatch, tmp_path):
 
     _patch_single_plan(monkeypatch)
 
-    def fake_prepare_catalog(path, config=None, client=None):
+    def fake_prepare_catalog(path, config=None, client=None, input_source=None):
         captured["prepare_client"] = client
         return prepared
 
@@ -118,7 +125,7 @@ def test_build_catalog_writes_hats(monkeypatch):
 
     _patch_single_plan(monkeypatch)
 
-    def fake_prepare_catalog(path, config=None, client=None):
+    def fake_prepare_catalog(path, config=None, client=None, input_source=None):
         calls["prepare_client"] = client
         return prepared
 
@@ -147,7 +154,7 @@ def test_build_catalog_suppresses_only_dask_large_graph_warning(monkeypatch):
     _patch_single_plan(monkeypatch)
     monkeypatch.setattr(
         "science_catalogs.catalog.prepare_catalog",
-        lambda path, config=None, client=None: prepared,
+        lambda path, config=None, client=None, input_source=None: prepared,
     )
 
     def fake_write_catalog(prepared, output_dir, client=None, output_format=None):
@@ -184,7 +191,7 @@ def test_build_catalog_processes_batch_sequentially_on_one_cluster(monkeypatch):
     monkeypatch.setattr("science_catalogs.catalog.load_build_plan", lambda path: plan)
     calls = []
 
-    def fake_prepare(path, config=None, client=None):
+    def fake_prepare(path, config=None, client=None, input_source=None):
         prepared = _Prepared()
         prepared.catalog_name = config["input"]["catalog_path"]
         calls.append(("prepare", prepared.catalog_name, client))

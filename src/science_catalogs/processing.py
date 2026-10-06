@@ -2,6 +2,7 @@
 
 import astropy.units as u
 import numpy as np
+import pandas as pd
 from astropy.coordinates import SkyCoord
 
 from science_catalogs.utils.config import (
@@ -387,4 +388,31 @@ def process_file_df(
     )
 
 
-__all__ = ["process_dataframe", "process_file_df", "MAG_CONV"]
+def process_files_df(
+    paths,
+    cfg_path: str | dict,
+    will_mag: bool,
+    will_dered_flux: bool,
+    will_dered_mag: bool,
+    output_columns=None,
+    output_dtypes=None,
+):
+    """Read and process a bounded group of files as one Dask partition."""
+    frames = [
+        process_file_df(
+            path,
+            cfg_path,
+            will_mag,
+            will_dered_flux,
+            will_dered_mag,
+            output_columns=output_columns,
+            output_dtypes=output_dtypes,
+        )
+        for path in paths
+    ]
+    if len(frames) == 1:
+        return frames[0]
+    return pd.concat(frames, ignore_index=True)
+
+
+__all__ = ["process_dataframe", "process_file_df", "process_files_df", "MAG_CONV"]
