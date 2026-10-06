@@ -15,12 +15,15 @@ LARGE_DP2_CATALOGS = {
     "object_shear_all",
     "source",
 }
-DP2_LARGE_TUNING = {
+DP2_TUNING = {
+    "dia_object": (16, 8, 2_000_000),
     "dia_object_forced_source": (64, 16, 8_000_000),
     "dia_source": (2, 8, 1_000_000),
+    "object": (1, 8, 250_000),
     "object_forced_source": (32, 16, 8_000_000),
     "object_shear_all": (1, 8, 1_500_000),
     "source": (1, 8, 1_000_000),
+    "visit_detector_table": (1, 1, 1_000_000),
 }
 
 
@@ -35,17 +38,18 @@ def test_dp2_large_individual_catalogs_limit_staging_tasks():
     configured_large_catalogs = {
         name for name, config in configs.items() if "target_rows_per_part" in config["output"]
     }
-    assert configured_large_catalogs == LARGE_DP2_CATALOGS
-    for name in LARGE_DP2_CATALOGS:
+    assert configured_large_catalogs == set(DP2_TUNING)
+    for name in DP2_TUNING:
         config = configs[name]
-        assert config["output"]["target_rows_per_part"] == DP2_LARGE_TUNING[name][2]
-        assert config["collection"]["catalog"]["highest_healpix_order"] == 12
+        assert config["output"]["target_rows_per_part"] == DP2_TUNING[name][2]
+        if name in LARGE_DP2_CATALOGS:
+            assert config["collection"]["catalog"]["highest_healpix_order"] == 12
 
 
 def test_dp2_large_individual_catalogs_use_size_aware_preflight():
     """Tune each large catalog according to its average Parquet file size."""
     individual_dir = REPO_ROOT / "examples/configs/dp2/individual"
-    for name, (files_per_partition, metadata_workers, _) in DP2_LARGE_TUNING.items():
+    for name, (files_per_partition, metadata_workers, _) in DP2_TUNING.items():
         config_path = individual_dir / f"lsst_dp2_{name}_to_hats.yml"
         config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
@@ -83,8 +87,8 @@ def test_dp2_batch_contains_all_positional_non_solar_catalogs():
     }
     assert configs["source"]["input"]["catalog_pattern"] == "**/*.parq"
     for name, cfg in configs.items():
-        if name in DP2_LARGE_TUNING:
-            files_per_partition, metadata_workers, _ = DP2_LARGE_TUNING[name]
+        if name in DP2_TUNING:
+            files_per_partition, metadata_workers, _ = DP2_TUNING[name]
             assert cfg["input"]["files_per_partition"] == files_per_partition
             assert cfg["input"]["parquet_metadata_workers"] == metadata_workers
         else:
@@ -100,13 +104,14 @@ def test_dp2_batch_contains_all_positional_non_solar_catalogs():
     configured_large_catalogs = {
         name for name, cfg in configs.items() if "target_rows_per_part" in cfg["output"]
     }
-    assert configured_large_catalogs == LARGE_DP2_CATALOGS
-    for name in LARGE_DP2_CATALOGS:
-        assert configs[name]["output"]["target_rows_per_part"] == DP2_LARGE_TUNING[name][2]
-        assert configs[name]["collection"]["catalog"] == {
-            "artifact_name": name,
-            "highest_healpix_order": 12,
-        }
+    assert configured_large_catalogs == set(DP2_TUNING)
+    for name in DP2_TUNING:
+        assert configs[name]["output"]["target_rows_per_part"] == DP2_TUNING[name][2]
+        if name in LARGE_DP2_CATALOGS:
+            assert configs[name]["collection"]["catalog"] == {
+                "artifact_name": name,
+                "highest_healpix_order": 12,
+            }
     assert all(cfg["photometry"] == {"enabled": False} for name, cfg in configs.items() if name != "object")
     assert all(cfg["output"]["on_existing"] == "error" for cfg in configs.values())
     assert all(cfg["collection"]["margin"]["threshold_arcsec"] == 5.0 for cfg in configs.values())

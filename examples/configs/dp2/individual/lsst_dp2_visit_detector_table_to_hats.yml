@@ -7,6 +7,8 @@ metadata:
 input:
   catalog_path: <path-to-data-on-mnt>/primary/catalogs/visit_detector_table
   catalog_pattern: "*.parq"
+  files_per_partition: 1
+  parquet_metadata_workers: 1
   ra_col: ra
   dec_col: dec
 
@@ -18,6 +20,7 @@ output:
   save_as: hats
   hats_artifact_name: visit_detector_table_collection
   on_existing: error
+  target_rows_per_part: 1000000
 
 collection:
   catalog:

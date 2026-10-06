@@ -39,11 +39,14 @@ batch:
       input:
         catalog_path: <path-to-data-on-mnt>/primary/catalogs/dia_object
         catalog_pattern: "*.parq"
+        files_per_partition: 16
+        parquet_metadata_workers: 8
         is_id_in_index: true
         ra_col: ra
         dec_col: dec
       output:
         hats_artifact_name: dia_object_collection
+        target_rows_per_part: 2000000
       collection:
         catalog:
           artifact_name: dia_object
@@ -87,6 +90,8 @@ batch:
       input:
         catalog_path: <path-to-data-on-data>/primary/catalogs/object
         catalog_pattern: "*.parq"
+        files_per_partition: 1
+        parquet_metadata_workers: 8
         ra_col: coord_ra
         dec_col: coord_dec
       photometry:
@@ -121,6 +126,7 @@ batch:
       output:
         base_path: <path-to-data-on-data>/secondary/catalogs
         hats_artifact_name: object_collection
+        target_rows_per_part: 250000
       collection:
         catalog:
           artifact_name: object
@@ -182,10 +188,13 @@ batch:
       input:
         catalog_path: <path-to-data-on-mnt>/primary/catalogs/visit_detector_table
         catalog_pattern: "*.parq"
+        files_per_partition: 1
+        parquet_metadata_workers: 1
         ra_col: ra
         dec_col: dec
       output:
         hats_artifact_name: visit_detector_table_collection
+        target_rows_per_part: 1000000
       collection:
         catalog:
           artifact_name: visit_detector_table
