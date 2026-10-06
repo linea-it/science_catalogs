@@ -15,10 +15,12 @@ LARGE_DP2_CATALOGS = {
     "object_shear_all",
     "source",
 }
-MANY_FILE_DP2_CATALOGS = {
-    "dia_object_forced_source",
-    "object_forced_source",
-    "source",
+DP2_LARGE_TUNING = {
+    "dia_object_forced_source": (64, 16, 8_000_000),
+    "dia_source": (2, 8, 1_000_000),
+    "object_forced_source": (32, 16, 8_000_000),
+    "object_shear_all": (1, 8, 1_500_000),
+    "source": (1, 8, 1_000_000),
 }
 
 
@@ -36,19 +38,19 @@ def test_dp2_large_individual_catalogs_limit_staging_tasks():
     assert configured_large_catalogs == LARGE_DP2_CATALOGS
     for name in LARGE_DP2_CATALOGS:
         config = configs[name]
-        assert config["output"]["target_rows_per_part"] == 1_000_000
+        assert config["output"]["target_rows_per_part"] == DP2_LARGE_TUNING[name][2]
         assert config["collection"]["catalog"]["highest_healpix_order"] == 12
 
 
-def test_dp2_many_file_individual_catalogs_use_scalable_preflight():
-    """Keep individual high-file-count configs aligned with robust SLURM startup."""
+def test_dp2_large_individual_catalogs_use_size_aware_preflight():
+    """Tune each large catalog according to its average Parquet file size."""
     individual_dir = REPO_ROOT / "examples/configs/dp2/individual"
-    for name in MANY_FILE_DP2_CATALOGS:
+    for name, (files_per_partition, metadata_workers, _) in DP2_LARGE_TUNING.items():
         config_path = individual_dir / f"lsst_dp2_{name}_to_hats.yml"
         config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
-        assert config["input"]["files_per_partition"] == 32
-        assert config["input"]["parquet_metadata_workers"] == 16
+        assert config["input"]["files_per_partition"] == files_per_partition
+        assert config["input"]["parquet_metadata_workers"] == metadata_workers
         assert config["execution"]["worker_wait_timeout"] == 900
         assert config["execution"]["slurm"]["death_timeout"] == 600
 
@@ -81,9 +83,10 @@ def test_dp2_batch_contains_all_positional_non_solar_catalogs():
     }
     assert configs["source"]["input"]["catalog_pattern"] == "**/*.parq"
     for name, cfg in configs.items():
-        if name in MANY_FILE_DP2_CATALOGS:
-            assert cfg["input"]["files_per_partition"] == 32
-            assert cfg["input"]["parquet_metadata_workers"] == 16
+        if name in DP2_LARGE_TUNING:
+            files_per_partition, metadata_workers, _ = DP2_LARGE_TUNING[name]
+            assert cfg["input"]["files_per_partition"] == files_per_partition
+            assert cfg["input"]["parquet_metadata_workers"] == metadata_workers
         else:
             assert "files_per_partition" not in cfg["input"]
             assert "parquet_metadata_workers" not in cfg["input"]
@@ -99,7 +102,7 @@ def test_dp2_batch_contains_all_positional_non_solar_catalogs():
     }
     assert configured_large_catalogs == LARGE_DP2_CATALOGS
     for name in LARGE_DP2_CATALOGS:
-        assert configs[name]["output"]["target_rows_per_part"] == 1_000_000
+        assert configs[name]["output"]["target_rows_per_part"] == DP2_LARGE_TUNING[name][2]
         assert configs[name]["collection"]["catalog"] == {
             "artifact_name": name,
             "highest_healpix_order": 12,

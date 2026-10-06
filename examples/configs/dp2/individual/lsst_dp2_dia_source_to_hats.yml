@@ -7,6 +7,8 @@ metadata:
 input:
   catalog_path: <path-to-data-on-mnt>/primary/catalogs/dia_source
   catalog_pattern: "*.parq"
+  files_per_partition: 2
+  parquet_metadata_workers: 8
   ra_col: ra
   dec_col: dec
 

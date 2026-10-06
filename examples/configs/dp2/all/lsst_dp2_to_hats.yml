@@ -55,13 +55,13 @@ batch:
       input:
         catalog_path: <path-to-data-on-mnt>/primary/catalogs/dia_object_forced_source
         catalog_pattern: "*.parq"
-        files_per_partition: 32
+        files_per_partition: 64
         parquet_metadata_workers: 16
         ra_col: coord_ra
         dec_col: coord_dec
       output:
         hats_artifact_name: dia_object_forced_source_collection
-        target_rows_per_part: 1000000
+        target_rows_per_part: 8000000
       collection:
         catalog:
           artifact_name: dia_object_forced_source
@@ -71,6 +71,8 @@ batch:
       input:
         catalog_path: <path-to-data-on-mnt>/primary/catalogs/dia_source
         catalog_pattern: "*.parq"
+        files_per_partition: 2
+        parquet_metadata_workers: 8
         ra_col: ra
         dec_col: dec
       output:
@@ -137,7 +139,7 @@ batch:
       output:
         base_path: <path-to-data-on-data>/secondary/catalogs
         hats_artifact_name: object_forced_source_collection
-        target_rows_per_part: 1000000
+        target_rows_per_part: 8000000
       collection:
         catalog:
           artifact_name: object_forced_source
@@ -147,12 +149,14 @@ batch:
       input:
         catalog_path: <path-to-data-on-data>/primary/catalogs/object_shear_all
         catalog_pattern: "*.parq"
+        files_per_partition: 1
+        parquet_metadata_workers: 8
         ra_col: ra
         dec_col: dec
       output:
         base_path: <path-to-data-on-data>/secondary/catalogs
         hats_artifact_name: object_shear_all_collection
-        target_rows_per_part: 1000000
+        target_rows_per_part: 1500000
       collection:
         catalog:
           artifact_name: object_shear_all
@@ -162,8 +166,8 @@ batch:
       input:
         catalog_path: <path-to-data-on-mnt>/primary/catalogs/source
         catalog_pattern: "**/*.parq"
-        files_per_partition: 32
-        parquet_metadata_workers: 16
+        files_per_partition: 1
+        parquet_metadata_workers: 8
         ra_col: coord_ra
         dec_col: coord_dec
       output:
