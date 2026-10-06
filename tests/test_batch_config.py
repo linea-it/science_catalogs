@@ -97,7 +97,7 @@ def test_dp2_batch_contains_all_positional_non_solar_catalogs():
     assert plan.execution_cfg["worker_wait_timeout"] == 900
     assert plan.execution_cfg["dask_connect_timeout"] == "120s"
     assert plan.execution_cfg["dask_tcp_timeout"] == "300s"
-    assert plan.execution_cfg["hats_max_in_flight_tasks"] == 1000
+    assert plan.execution_cfg["hats_max_in_flight_tasks"] == 120
     assert plan.execution_cfg["slurm"]["death_timeout"] == 600
     assert plan.execution_cfg["slurm"]["cores"] == 1
     assert configs["object"]["photometry"]["enabled"] is True
@@ -114,13 +114,20 @@ def test_dp2_batch_contains_all_positional_non_solar_catalogs():
         if name in LARGE_DP2_CATALOGS:
             expected_catalog = {
                 "artifact_name": name,
+                "pixel_threshold": (
+                    2_000_000 if name in {"dia_object_forced_source", "object_forced_source"} else 1_000_000
+                ),
                 "highest_healpix_order": 12,
             }
-            if name in {"dia_object_forced_source", "object_forced_source"}:
-                expected_catalog["pixel_threshold"] = 2_000_000
             assert configs[name]["collection"]["catalog"] == expected_catalog
     assert all(cfg["photometry"] == {"enabled": False} for name, cfg in configs.items() if name != "object")
-    assert configs["object"]["collection"]["catalog"]["pixel_threshold"] == 250_000
+    assert configs["object"]["collection"]["catalog"] == {
+        "artifact_name": "object",
+        "pixel_threshold": 250_000,
+        "highest_healpix_order": 12,
+    }
+    for name in {"dia_object", "visit_detector_table"}:
+        assert configs[name]["collection"]["catalog"]["pixel_threshold"] == 1_000_000
     assert all(cfg["output"]["on_existing"] == "error" for cfg in configs.values())
     assert all(cfg["collection"]["margin"]["threshold_arcsec"] == 5.0 for cfg in configs.values())
     data_catalogs = {"object", "object_forced_source", "object_shear_all"}

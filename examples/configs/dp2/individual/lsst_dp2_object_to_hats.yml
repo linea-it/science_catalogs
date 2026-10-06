@@ -53,6 +53,7 @@ collection:
   catalog:
     artifact_name: object
     pixel_threshold: 250000
+    highest_healpix_order: 12
   margin:
     threshold_arcsec: 5.0
   indexes:
@@ -64,7 +65,7 @@ execution:
   worker_wait_timeout: 900
   dask_connect_timeout: 120s
   dask_tcp_timeout: 300s
-  hats_max_in_flight_tasks: 1000
+  hats_max_in_flight_tasks: 120
   slurm:
     interface: ib0
     queue: cpu_pipelines

@@ -7,6 +7,7 @@ import re
 import shutil
 import sys
 import tempfile
+import threading
 import warnings
 from contextlib import contextmanager
 from pathlib import Path
@@ -21,7 +22,7 @@ _fname_safe_re = re.compile(r"[^A-Za-z0-9._-]+")
 _HATS_COLLECTION_VALIDATION_MESSAGE = "Looking for catalog - found collection."
 _HATS_PARTITION_INFO_WARNING = "Computing partitions from catalog parquet files. This may be slow."
 _HATS_CLIENT_CLOSE_TIMEOUT_SECONDS = 60
-_DEFAULT_HATS_MAX_IN_FLIGHT_TASKS = 1000
+_DEFAULT_HATS_MAX_IN_FLIGHT_TASKS = 120
 logger = logging.getLogger(__name__)
 
 
@@ -149,16 +150,30 @@ class _BoundedSubmitClient:
     def __init__(self, client, max_in_flight: int):
         self.client = client
         self.max_in_flight = max_in_flight
-        self._in_flight = set()
+        self._condition = threading.Condition()
+        self._unfinished = 0
+
+    def _release_slot(self, _future=None):
+        with self._condition:
+            self._unfinished -= 1
+            self._condition.notify()
 
     def submit(self, *args, **kwargs):
-        from distributed import wait
+        # Reserve a slot before submitting so a fast Future cannot finish before
+        # it is included in the count.  Future callbacks run on the Dask client's
+        # event-loop thread and only perform this small, thread-safe notification;
+        # unlike distributed.wait(), this creates no asyncio waiter per Future.
+        with self._condition:
+            while self._unfinished >= self.max_in_flight:
+                self._condition.wait()
+            self._unfinished += 1
 
-        if len(self._in_flight) >= self.max_in_flight:
-            _, not_done = wait(list(self._in_flight), return_when="FIRST_COMPLETED")
-            self._in_flight = set(not_done)
-        future = self.client.submit(*args, **kwargs)
-        self._in_flight.add(future)
+        try:
+            future = self.client.submit(*args, **kwargs)
+            future.add_done_callback(self._release_slot)
+        except BaseException:
+            self._release_slot()
+            raise
         return future
 
     def __getattr__(self, name):

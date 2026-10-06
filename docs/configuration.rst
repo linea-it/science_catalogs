@@ -141,7 +141,7 @@ thread; increase either value explicitly when the workload and available memory 
 and 300 seconds, respectively. The longer TCP timeout tolerates temporary scheduler
 stalls while very large HATS task graphs are being planned. HATS imports also apply
 submission backpressure: ``execution.hats_max_in_flight_tasks`` limits the number of
-unfinished tasks submitted by ``hats-import`` (default 1000), preventing tens of
+unfinished tasks submitted by ``hats-import`` (default 120), preventing tens of
 thousands of futures from reaching the scheduler in one burst.
 
 HATS output always includes a default margin catalog. Its default threshold is 5

@@ -12,7 +12,7 @@ batch:
     worker_wait_timeout: 900
     dask_connect_timeout: 120s
     dask_tcp_timeout: 300s
-    hats_max_in_flight_tasks: 1000
+    hats_max_in_flight_tasks: 120
     slurm:
       interface: ib0
       queue: cpu_pipelines
@@ -53,6 +53,7 @@ batch:
       collection:
         catalog:
           artifact_name: dia_object
+          pixel_threshold: 1000000
         indexes:
           - column: diaObjectId
             drop_duplicates: false
@@ -88,6 +89,7 @@ batch:
       collection:
         catalog:
           artifact_name: dia_source
+          pixel_threshold: 1000000
           highest_healpix_order: 12
 
     - name: object
@@ -135,6 +137,7 @@ batch:
         catalog:
           artifact_name: object
           pixel_threshold: 250000
+          highest_healpix_order: 12
         indexes:
           - column: objectId
             drop_duplicates: false
@@ -172,6 +175,7 @@ batch:
       collection:
         catalog:
           artifact_name: object_shear_all
+          pixel_threshold: 1000000
           highest_healpix_order: 12
 
     - name: source
@@ -188,6 +192,7 @@ batch:
       collection:
         catalog:
           artifact_name: source
+          pixel_threshold: 1000000
           highest_healpix_order: 12
 
     - name: visit_detector_table
@@ -204,3 +209,4 @@ batch:
       collection:
         catalog:
           artifact_name: visit_detector_table
+          pixel_threshold: 1000000

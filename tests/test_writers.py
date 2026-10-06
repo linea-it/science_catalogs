@@ -3,6 +3,7 @@
 import logging
 import shutil
 import sys
+import threading
 import types
 import warnings
 from pathlib import Path
@@ -30,14 +31,21 @@ def isolated_hats_client(monkeypatch):
 
 
 def test_bounded_submit_client_applies_backpressure(monkeypatch):
-    """Wait for task completion before exceeding the configured in-flight bound."""
+    """Block submission at the bound and resume it from a Future callback."""
     import distributed
 
     submitted = []
-    wait_calls = []
 
     class _Future:
-        pass
+        def __init__(self):
+            self.callbacks = []
+
+        def add_done_callback(self, callback):
+            self.callbacks.append(callback)
+
+        def finish(self):
+            for callback in self.callbacks:
+                callback(self)
 
     class _Client:
         def submit(self, value):
@@ -45,21 +53,32 @@ def test_bounded_submit_client_applies_backpressure(monkeypatch):
             submitted.append((value, future))
             return future
 
-    def fake_wait(futures, return_when):
-        wait_calls.append((set(futures), return_when))
-        return {futures[0]}, set(futures[1:])
-
-    monkeypatch.setattr(distributed, "wait", fake_wait)
+    monkeypatch.setattr(
+        distributed,
+        "wait",
+        lambda *args, **kwargs: pytest.fail("backpressure must not create Dask waiters"),
+    )
     client = writers._BoundedSubmitClient(_Client(), max_in_flight=2)
 
     client.submit("first")
     client.submit("second")
-    client.submit("third")
+    third_submitted = threading.Event()
+
+    def submit_third():
+        client.submit("third")
+        third_submitted.set()
+
+    submit_thread = threading.Thread(target=submit_third)
+    submit_thread.start()
+
+    assert not third_submitted.wait(timeout=0.05)
+    submitted[0][1].finish()
+    submit_thread.join(timeout=1)
 
     assert len(submitted) == 3
-    assert len(wait_calls) == 1
-    assert wait_calls[0][1] == "FIRST_COMPLETED"
-    assert len(client._in_flight) == 2
+    assert third_submitted.is_set()
+    assert not submit_thread.is_alive()
+    assert client._unfinished == 2
 
 
 def test_write_hats_catalog_resumes_margin_from_valid_primary(monkeypatch, tmp_path, isolated_hats_client):
@@ -184,7 +203,7 @@ def test_write_hats_catalog_marks_margin_as_default(monkeypatch, tmp_path, isola
     assert captured["margin"]["margin_threshold"] == 5.0
     assert captured["margin"]["is_default"] is True
     assert captured["run_client"].client is isolated_hats_client
-    assert captured["run_client"].max_in_flight == 1000
+    assert captured["run_client"].max_in_flight == 120
     assert isolated_hats_client.closed is True
 
 
