@@ -116,16 +116,12 @@ def test_dp2_batch_contains_all_positional_non_solar_catalogs():
                 "artifact_name": name,
                 "highest_healpix_order": 12,
             }
-            if name == "object_forced_source":
+            if name in {"dia_object_forced_source", "object_forced_source"}:
                 expected_catalog["pixel_threshold"] = 2_000_000
             assert configs[name]["collection"]["catalog"] == expected_catalog
     assert all(cfg["photometry"] == {"enabled": False} for name, cfg in configs.items() if name != "object")
-    assert configs["object_forced_source"]["output"]["on_existing"] == "reuse"
-    assert all(
-        cfg["output"]["on_existing"] == "error"
-        for name, cfg in configs.items()
-        if name != "object_forced_source"
-    )
+    assert configs["object"]["collection"]["catalog"]["pixel_threshold"] == 250_000
+    assert all(cfg["output"]["on_existing"] == "error" for cfg in configs.values())
     assert all(cfg["collection"]["margin"]["threshold_arcsec"] == 5.0 for cfg in configs.values())
     data_catalogs = {"object", "object_forced_source", "object_shear_all"}
     for name, config in configs.items():

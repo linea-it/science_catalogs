@@ -25,6 +25,7 @@ output:
 collection:
   catalog:
     artifact_name: dia_object_forced_source
+    pixel_threshold: 2000000
     highest_healpix_order: 12
   margin:
     threshold_arcsec: 5.0

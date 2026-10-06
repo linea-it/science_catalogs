@@ -19,7 +19,7 @@ output:
   base_path: <path-to-data-on-data>/secondary/catalogs
   save_as: hats
   hats_artifact_name: object_forced_source_collection
-  on_existing: reuse
+  on_existing: error
   target_rows_per_part: 2000000
 
 collection:

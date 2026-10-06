@@ -52,6 +52,7 @@ output:
 collection:
   catalog:
     artifact_name: object
+    pixel_threshold: 250000
   margin:
     threshold_arcsec: 5.0
   indexes:

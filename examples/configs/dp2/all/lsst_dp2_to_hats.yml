@@ -71,6 +71,7 @@ batch:
       collection:
         catalog:
           artifact_name: dia_object_forced_source
+          pixel_threshold: 2000000
           highest_healpix_order: 12
 
     - name: dia_source
@@ -133,6 +134,7 @@ batch:
       collection:
         catalog:
           artifact_name: object
+          pixel_threshold: 250000
         indexes:
           - column: objectId
             drop_duplicates: false
@@ -148,7 +150,6 @@ batch:
       output:
         base_path: <path-to-data-on-data>/secondary/catalogs
         hats_artifact_name: object_forced_source_collection
-        on_existing: reuse
         target_rows_per_part: 2000000
       collection:
         catalog:
