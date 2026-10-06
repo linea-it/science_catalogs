@@ -21,6 +21,7 @@ _fname_safe_re = re.compile(r"[^A-Za-z0-9._-]+")
 _HATS_COLLECTION_VALIDATION_MESSAGE = "Looking for catalog - found collection."
 _HATS_PARTITION_INFO_WARNING = "Computing partitions from catalog parquet files. This may be slow."
 _HATS_CLIENT_CLOSE_TIMEOUT_SECONDS = 60
+_DEFAULT_HATS_MAX_IN_FLIGHT_TASKS = 1000
 logger = logging.getLogger(__name__)
 
 
@@ -142,6 +143,28 @@ def _create_hats_client(client):
     return Client(scheduler_address, set_as_default=False)
 
 
+class _BoundedSubmitClient:
+    """Proxy a Dask client while bounding the number of unfinished submitted tasks."""
+
+    def __init__(self, client, max_in_flight: int):
+        self.client = client
+        self.max_in_flight = max_in_flight
+        self._in_flight = set()
+
+    def submit(self, *args, **kwargs):
+        from distributed import wait
+
+        if len(self._in_flight) >= self.max_in_flight:
+            _, not_done = wait(list(self._in_flight), return_when="FIRST_COMPLETED")
+            self._in_flight = set(not_done)
+        future = self.client.submit(*args, **kwargs)
+        self._in_flight.add(future)
+        return future
+
+    def __getattr__(self, name):
+        return getattr(self.client, name)
+
+
 def write_hats_catalog(
     ddf_out: dd.DataFrame,
     output_cfg: dict[str, Any],
@@ -153,6 +176,7 @@ def write_hats_catalog(
     client=None,
     *,
     force_recreate: bool = False,
+    execution_cfg: dict[str, Any] | None = None,
 ):
     """Materialize staging files and import them as a HATS collection."""
     if not ra_col or not dec_col:
@@ -187,6 +211,7 @@ def write_hats_catalog(
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     artifact_path = output_path / artifact_name
+    resume_catalog_path = None
 
     artifact_is_valid = is_valid_collection(artifact_path)
     if artifact_is_valid:
@@ -199,8 +224,18 @@ def write_hats_catalog(
         if on_existing == "error":
             raise FileExistsError(f"HATS output already exists: {artifact_path}")
         if on_existing == "reuse":
-            raise FileExistsError(
-                f"HATS output path exists but is not a valid collection and cannot be reused: {artifact_path}"
+            from hats.io.validation import is_valid_catalog
+
+            candidate = artifact_path / catalog_artifact_name
+            if not is_valid_catalog(candidate):
+                raise FileExistsError(
+                    "HATS output path exists but contains neither a valid collection nor a "
+                    f"resumable primary catalog: {artifact_path}"
+                )
+            resume_catalog_path = candidate
+            logger.info(
+                "Resuming incomplete HATS collection from existing primary catalog: %s",
+                resume_catalog_path,
             )
 
     try:
@@ -221,9 +256,11 @@ def write_hats_catalog(
 
     cleanup_staging = True
     try:
-        staging_cfg = dict(output_cfg)
-        staging_cfg["save_as"] = source_format
-        written_paths = write_partitions(ddf_out, staging_cfg, str(staging_dir), suffix)
+        written_paths = []
+        if resume_catalog_path is None:
+            staging_cfg = dict(output_cfg)
+            staging_cfg["save_as"] = source_format
+            written_paths = write_partitions(ddf_out, staging_cfg, str(staging_dir), suffix)
 
         if source_format == "parquet":
             file_reader = ParquetPyarrowReader()
@@ -238,16 +275,22 @@ def write_hats_catalog(
             progress_bar=True,
             tqdm_kwargs={"file": sys.stdout},
         )
-        catalog_kwargs = {
-            "output_artifact_name": catalog_artifact_name,
-            "ra_column": ra_col,
-            "dec_column": dec_col,
-            "input_file_list": [Path(path) for path in written_paths],
-            "file_reader": file_reader,
-        }
-        for key in ("pixel_threshold", "highest_healpix_order"):
-            if key in catalog_cfg:
-                catalog_kwargs[key] = catalog_cfg[key]
+        if resume_catalog_path is not None:
+            catalog_kwargs = {
+                "output_artifact_name": catalog_artifact_name,
+                "catalog_path": str(resume_catalog_path),
+            }
+        else:
+            catalog_kwargs = {
+                "output_artifact_name": catalog_artifact_name,
+                "ra_column": ra_col,
+                "dec_column": dec_col,
+                "input_file_list": [Path(path) for path in written_paths],
+                "file_reader": file_reader,
+            }
+            for key in ("pixel_threshold", "highest_healpix_order"):
+                if key in catalog_cfg:
+                    catalog_kwargs[key] = catalog_cfg[key]
         args = args.catalog(
             **catalog_kwargs,
         )
@@ -272,13 +315,23 @@ def write_hats_catalog(
         # A dedicated client lets us cancel/drain only those futures before removing
         # staging files, without affecting other work on the shared cluster.
         hats_client = _create_hats_client(client)
+        execution_cfg = execution_cfg or {}
+        max_in_flight = int(
+            execution_cfg.get("hats_max_in_flight_tasks", _DEFAULT_HATS_MAX_IN_FLIGHT_TASKS)
+            or _DEFAULT_HATS_MAX_IN_FLIGHT_TASKS
+        )
+        bounded_hats_client = _BoundedSubmitClient(hats_client, max_in_flight)
         cleanup_staging = False
         import_error = None
 
         try:
-            logger.info("Importing staging files into HATS collection: %s", artifact_name)
+            logger.info(
+                "Importing HATS collection %s with at most %d unfinished task(s)",
+                artifact_name,
+                max_in_flight,
+            )
             with _suppress_hats_collection_validation_warning():
-                run(args, hats_client)
+                run(args, bounded_hats_client)
             logger.info("HATS collection created: %s", artifact_path)
         except BaseException as exc:
             import_error = exc

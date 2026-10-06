@@ -117,7 +117,19 @@ def _warn_alias(old: str, new: str, enabled: bool) -> None:
 
 def _validate_execution(execution: dict[str, Any], path: str) -> None:
     """Validate conservative runtime requirements for local and SLURM executors."""
-    _reject_unknown(execution, {"executor", "local", "slurm", "worker_wait_timeout"}, path)
+    _reject_unknown(
+        execution,
+        {
+            "executor",
+            "local",
+            "slurm",
+            "worker_wait_timeout",
+            "dask_connect_timeout",
+            "dask_tcp_timeout",
+            "hats_max_in_flight_tasks",
+        },
+        path,
+    )
     executor = execution.get("executor", "local")
     if executor not in {"local", "slurm"}:
         raise ValueError(f"{path}.executor must be 'local' or 'slurm'")
@@ -128,6 +140,21 @@ def _validate_execution(execution: dict[str, Any], path: str) -> None:
         isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0
     ):
         raise ValueError(f"{path}.worker_wait_timeout must be a positive number")
+    for key in ("dask_connect_timeout", "dask_tcp_timeout"):
+        value = execution.get(key)
+        invalid_duration = (
+            isinstance(value, bool)
+            or (isinstance(value, (int, float)) and value <= 0)
+            or (isinstance(value, str) and not value.strip())
+            or (value is not None and not isinstance(value, (str, int, float)))
+        )
+        if invalid_duration:
+            raise ValueError(f"{path}.{key} must be a non-empty duration")
+    max_in_flight = execution.get("hats_max_in_flight_tasks")
+    if max_in_flight is not None and (
+        isinstance(max_in_flight, bool) or not isinstance(max_in_flight, int) or max_in_flight <= 0
+    ):
+        raise ValueError(f"{path}.hats_max_in_flight_tasks must be a positive integer")
     if executor == "slurm":
         required = ("cores", "processes", "memory", "walltime")
         missing = [key for key in required if slurm.get(key) in (None, "")]

@@ -10,6 +10,9 @@ batch:
   execution:
     executor: slurm
     worker_wait_timeout: 900
+    dask_connect_timeout: 120s
+    dask_tcp_timeout: 300s
+    hats_max_in_flight_tasks: 1000
     slurm:
       interface: ib0
       queue: cpu_pipelines
@@ -145,10 +148,12 @@ batch:
       output:
         base_path: <path-to-data-on-data>/secondary/catalogs
         hats_artifact_name: object_forced_source_collection
+        on_existing: reuse
         target_rows_per_part: 2000000
       collection:
         catalog:
           artifact_name: object_forced_source
+          pixel_threshold: 2000000
           highest_healpix_order: 12
 
     - name: object_shear_all

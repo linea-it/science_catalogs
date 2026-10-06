@@ -3,14 +3,31 @@
 import logging
 from typing import Any
 
+import dask
 from dask.distributed import LocalCluster
 from dask_jobqueue import SLURMCluster
+
+DEFAULT_DASK_CONNECT_TIMEOUT = "120s"
+DEFAULT_DASK_TCP_TIMEOUT = "300s"
 
 
 def get_executor(executor_cfg: dict[str, Any]):
     """Create a Dask cluster (local or Slurm) from the ``cluster`` YAML block."""
     logger = logging.getLogger(__name__)
     name = executor_cfg.get("executor", "local")
+    connect_timeout = executor_cfg.get("dask_connect_timeout", DEFAULT_DASK_CONNECT_TIMEOUT)
+    tcp_timeout = executor_cfg.get("dask_tcp_timeout", DEFAULT_DASK_TCP_TIMEOUT)
+    dask.config.set(
+        {
+            "distributed.comm.timeouts.connect": connect_timeout,
+            "distributed.comm.timeouts.tcp": tcp_timeout,
+        }
+    )
+    logger.info(
+        "Configured Dask communication timeouts: connect=%s, tcp=%s",
+        connect_timeout,
+        tcp_timeout,
+    )
 
     if name == "local":
         args = dict(executor_cfg.get("local", {}))

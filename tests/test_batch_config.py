@@ -95,6 +95,9 @@ def test_dp2_batch_contains_all_positional_non_solar_catalogs():
             assert "files_per_partition" not in cfg["input"]
             assert "parquet_metadata_workers" not in cfg["input"]
     assert plan.execution_cfg["worker_wait_timeout"] == 900
+    assert plan.execution_cfg["dask_connect_timeout"] == "120s"
+    assert plan.execution_cfg["dask_tcp_timeout"] == "300s"
+    assert plan.execution_cfg["hats_max_in_flight_tasks"] == 1000
     assert plan.execution_cfg["slurm"]["death_timeout"] == 600
     assert plan.execution_cfg["slurm"]["cores"] == 1
     assert configs["object"]["photometry"]["enabled"] is True
@@ -109,12 +112,20 @@ def test_dp2_batch_contains_all_positional_non_solar_catalogs():
     for name in DP2_TUNING:
         assert configs[name]["output"]["target_rows_per_part"] == DP2_TUNING[name][2]
         if name in LARGE_DP2_CATALOGS:
-            assert configs[name]["collection"]["catalog"] == {
+            expected_catalog = {
                 "artifact_name": name,
                 "highest_healpix_order": 12,
             }
+            if name == "object_forced_source":
+                expected_catalog["pixel_threshold"] = 2_000_000
+            assert configs[name]["collection"]["catalog"] == expected_catalog
     assert all(cfg["photometry"] == {"enabled": False} for name, cfg in configs.items() if name != "object")
-    assert all(cfg["output"]["on_existing"] == "error" for cfg in configs.values())
+    assert configs["object_forced_source"]["output"]["on_existing"] == "reuse"
+    assert all(
+        cfg["output"]["on_existing"] == "error"
+        for name, cfg in configs.items()
+        if name != "object_forced_source"
+    )
     assert all(cfg["collection"]["margin"]["threshold_arcsec"] == 5.0 for cfg in configs.values())
     data_catalogs = {"object", "object_forced_source", "object_shear_all"}
     for name, config in configs.items():

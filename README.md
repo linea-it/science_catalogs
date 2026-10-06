@@ -104,6 +104,10 @@ Run `science-catalogs --help` for the complete command synopsis. Configuration i
 validated before execution, so unknown keys and scientifically inconsistent
 photometric transformations fail before catalog materialization begins.
 
+Large HATS imports use bounded task submission and extended Dask communication
+timeouts by default. An incomplete HATS collection can be resumed with
+`output.on_existing: reuse` when its primary catalog is already valid.
+
 A YAML file may also contain a `batch` section with shared `defaults` and a list
 of named `catalogs`. Batch entries run one at a time on the same Dask executor and
 the command reports the artifact produced for each catalog. See

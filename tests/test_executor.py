@@ -28,6 +28,27 @@ def test_get_local_executor_disables_dashboard_by_default(monkeypatch):
     assert captured["processes"] is True
 
 
+def test_get_executor_configures_conservative_communication_timeouts(monkeypatch):
+    """Keep scheduler stalls from tripping Dask's short TCP timeout."""
+    captured = {}
+
+    monkeypatch.setattr("science_catalogs.executor.dask.config.set", lambda values: captured.update(values))
+    monkeypatch.setattr("science_catalogs.executor.LocalCluster", lambda **kwargs: "cluster")
+
+    get_executor(
+        {
+            "executor": "local",
+            "dask_connect_timeout": "180s",
+            "dask_tcp_timeout": "600s",
+        }
+    )
+
+    assert captured == {
+        "distributed.comm.timeouts.connect": "180s",
+        "distributed.comm.timeouts.tcp": "600s",
+    }
+
+
 def test_get_slurm_executor_disables_dashboard_by_default(monkeypatch):
     """Avoid starting Bokeh dashboard services for SLURM clusters by default."""
     captured = {}

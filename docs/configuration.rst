@@ -137,6 +137,13 @@ seconds). ``cores``, ``processes``, ``memory``, and ``walltime`` must be provide
 explicitly for SLURM execution. Local execution defaults to one worker process with one
 thread; increase either value explicitly when the workload and available memory permit.
 
+``execution.dask_connect_timeout`` and ``execution.dask_tcp_timeout`` default to 120
+and 300 seconds, respectively. The longer TCP timeout tolerates temporary scheduler
+stalls while very large HATS task graphs are being planned. HATS imports also apply
+submission backpressure: ``execution.hats_max_in_flight_tasks`` limits the number of
+unfinished tasks submitted by ``hats-import`` (default 1000), preventing tens of
+thousands of futures from reaching the scheduler in one burst.
+
 HATS output always includes a default margin catalog. Its default threshold is 5
 arcseconds and may be overridden with ``collection.margin.threshold_arcsec``.
 
@@ -211,7 +218,10 @@ storage roots while still sharing an executor.
 ``execution`` belongs to the batch because all entries share one cluster. HATS artifact
 names and catalog names must be unique. For HATS output, the ``on_existing`` policy is
 ``error`` by default for both batch and single-catalog builds and may be set to ``reuse``
-or ``replace`` explicitly. Recursive patterns such as ``**/*.parq`` allow
+or ``replace`` explicitly. When ``reuse`` finds an incomplete collection containing a
+valid primary catalog, the pipeline skips primary-catalog staging and resumes missing
+margin and index products through ``hats-import``. It still rejects an incomplete path
+without a valid primary catalog. Recursive patterns such as ``**/*.parq`` allow
 one logical catalog to include band directories while preserving the band column.
 Non-HATS batch outputs are placed in a subdirectory named after each catalog so that
 partition filenames from different entries cannot collide.

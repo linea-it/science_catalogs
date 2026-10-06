@@ -5,6 +5,7 @@ import shutil
 import sys
 import types
 import warnings
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -26,6 +27,110 @@ def isolated_hats_client(monkeypatch):
     fake_client = _FakeClient()
     monkeypatch.setattr(writers, "_create_hats_client", lambda client: fake_client)
     return fake_client
+
+
+def test_bounded_submit_client_applies_backpressure(monkeypatch):
+    """Wait for task completion before exceeding the configured in-flight bound."""
+    import distributed
+
+    submitted = []
+    wait_calls = []
+
+    class _Future:
+        pass
+
+    class _Client:
+        def submit(self, value):
+            future = _Future()
+            submitted.append((value, future))
+            return future
+
+    def fake_wait(futures, return_when):
+        wait_calls.append((set(futures), return_when))
+        return {futures[0]}, set(futures[1:])
+
+    monkeypatch.setattr(distributed, "wait", fake_wait)
+    client = writers._BoundedSubmitClient(_Client(), max_in_flight=2)
+
+    client.submit("first")
+    client.submit("second")
+    client.submit("third")
+
+    assert len(submitted) == 3
+    assert len(wait_calls) == 1
+    assert wait_calls[0][1] == "FIRST_COMPLETED"
+    assert len(client._in_flight) == 2
+
+
+def test_write_hats_catalog_resumes_margin_from_valid_primary(monkeypatch, tmp_path, isolated_hats_client):
+    """Resume an incomplete collection without rebuilding its valid primary catalog."""
+    artifact_path = tmp_path / "demo"
+    primary_path = artifact_path / "catalog"
+    primary_path.mkdir(parents=True)
+    captured = {}
+
+    class _FakeCollectionArguments:
+        def __init__(self, **kwargs):
+            self.tqdm_kwargs = kwargs.get("tqdm_kwargs") or {}
+
+        def catalog(self, **kwargs):
+            captured["catalog"] = kwargs
+            return self
+
+        def add_margin(self, **kwargs):
+            captured["margin"] = kwargs
+            return self
+
+    monkeypatch.setitem(
+        sys.modules,
+        "hats.io.validation",
+        types.SimpleNamespace(
+            is_valid_collection=lambda path: False,
+            is_valid_catalog=lambda path: Path(path) == primary_path,
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hats_import.catalog.file_readers",
+        types.SimpleNamespace(CsvReader=lambda: "csv", ParquetPyarrowReader=lambda: "parquet"),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hats_import.collection.arguments",
+        types.SimpleNamespace(CollectionArguments=_FakeCollectionArguments),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hats_import.collection.run_import",
+        types.SimpleNamespace(run=lambda args, client: captured.update(run_client=client)),
+    )
+    monkeypatch.setattr(
+        writers,
+        "write_partitions",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("staging should not be rebuilt when the primary catalog is valid")
+        ),
+    )
+
+    result = writers.write_hats_catalog(
+        pd.DataFrame({"ra": [1.0], "dec": [2.0]}),
+        {"save_as": "hats", "hats_artifact_name": "demo", "on_existing": "reuse"},
+        {"catalog": {"artifact_name": "catalog"}},
+        str(tmp_path),
+        "_demo",
+        "ra",
+        "dec",
+        client="fake_client",
+        execution_cfg={"hats_max_in_flight_tasks": 250},
+    )
+
+    assert result == (str(artifact_path),)
+    assert captured["catalog"] == {
+        "output_artifact_name": "catalog",
+        "catalog_path": str(primary_path),
+    }
+    assert captured["run_client"].max_in_flight == 250
+    assert isolated_hats_client.closed is True
 
 
 def test_write_hats_catalog_marks_margin_as_default(monkeypatch, tmp_path, isolated_hats_client):
@@ -78,7 +183,8 @@ def test_write_hats_catalog_marks_margin_as_default(monkeypatch, tmp_path, isola
 
     assert captured["margin"]["margin_threshold"] == 5.0
     assert captured["margin"]["is_default"] is True
-    assert captured["run_client"] is isolated_hats_client
+    assert captured["run_client"].client is isolated_hats_client
+    assert captured["run_client"].max_in_flight == 1000
     assert isolated_hats_client.closed is True
 
 

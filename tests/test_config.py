@@ -244,6 +244,21 @@ def test_normalize_catalog_config_accepts_complete_slurm_resources():
     assert config["execution"]["slurm"]["memory"] == "48GB"
 
 
+@pytest.mark.parametrize(
+    ("key", "value", "message"),
+    [
+        ("dask_connect_timeout", 0, "non-empty duration"),
+        ("dask_tcp_timeout", "", "non-empty duration"),
+        ("hats_max_in_flight_tasks", 0, "positive integer"),
+        ("hats_max_in_flight_tasks", True, "positive integer"),
+    ],
+)
+def test_normalize_catalog_config_rejects_invalid_runtime_safety_limits(key, value, message):
+    """Reject timeout and backpressure settings that disable their protection."""
+    with pytest.raises(ValueError, match=message):
+        normalize_catalog_config({"execution": {key: value}})
+
+
 def test_resolve_nested_invalid_handling_preserves_all_operations():
     """Map nested value/error policies to every existing processing feature."""
     resolved = resolve_invalid_handling(

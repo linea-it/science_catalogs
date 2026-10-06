@@ -547,6 +547,7 @@ def write_catalog(
             prepared.ra_col,
             prepared.dec_col,
             client=client,
+            execution_cfg=prepared.config.get("execution", {}),
         )
     return write_partitions(prepared.ddf, output_cfg, str(output_path), prepared.suffix)
 

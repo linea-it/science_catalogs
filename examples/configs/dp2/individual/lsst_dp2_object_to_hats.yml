@@ -61,6 +61,9 @@ collection:
 execution:
   executor: slurm
   worker_wait_timeout: 900
+  dask_connect_timeout: 120s
+  dask_tcp_timeout: 300s
+  hats_max_in_flight_tasks: 1000
   slurm:
     interface: ib0
     queue: cpu_pipelines
