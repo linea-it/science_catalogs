@@ -7,7 +7,7 @@ metadata:
 input:
   catalog_path: <path-to-data-on-data>/primary/catalogs/object_forced_source
   catalog_pattern: "*.parq"
-  files_per_partition: 32
+  files_per_partition: 8
   parquet_metadata_workers: 16
   ra_col: coord_ra
   dec_col: coord_dec
@@ -20,7 +20,7 @@ output:
   save_as: hats
   hats_artifact_name: object_forced_source_collection
   on_existing: error
-  target_rows_per_part: 8000000
+  target_rows_per_part: 2000000
 
 collection:
   catalog:
@@ -35,7 +35,7 @@ execution:
   slurm:
     interface: ib0
     queue: cpu_pipelines
-    cores: 2
+    cores: 1
     processes: 1
     memory: 48GB
     walltime: "12:00:00"

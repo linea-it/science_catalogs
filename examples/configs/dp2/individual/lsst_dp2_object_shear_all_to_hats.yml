@@ -35,7 +35,7 @@ execution:
   slurm:
     interface: ib0
     queue: cpu_pipelines
-    cores: 2
+    cores: 1
     processes: 1
     memory: 48GB
     walltime: "12:00:00"

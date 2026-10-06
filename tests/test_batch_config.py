@@ -16,13 +16,13 @@ LARGE_DP2_CATALOGS = {
     "source",
 }
 DP2_TUNING = {
-    "dia_object": (16, 8, 2_000_000),
-    "dia_object_forced_source": (64, 16, 8_000_000),
-    "dia_source": (2, 8, 1_000_000),
+    "dia_object": (8, 8, 1_000_000),
+    "dia_object_forced_source": (8, 16, 1_000_000),
+    "dia_source": (1, 8, 500_000),
     "object": (1, 8, 250_000),
-    "object_forced_source": (32, 16, 8_000_000),
+    "object_forced_source": (8, 16, 2_000_000),
     "object_shear_all": (1, 8, 1_500_000),
-    "source": (1, 8, 1_000_000),
+    "source": (1, 8, 600_000),
     "visit_detector_table": (1, 1, 1_000_000),
 }
 
@@ -96,6 +96,7 @@ def test_dp2_batch_contains_all_positional_non_solar_catalogs():
             assert "parquet_metadata_workers" not in cfg["input"]
     assert plan.execution_cfg["worker_wait_timeout"] == 900
     assert plan.execution_cfg["slurm"]["death_timeout"] == 600
+    assert plan.execution_cfg["slurm"]["cores"] == 1
     assert configs["object"]["photometry"]["enabled"] is True
     assert len(configs["object"]["photometry"]["measurements"]) == 2
     assert configs["dia_object"]["collection"]["indexes"] == [

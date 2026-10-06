@@ -13,7 +13,7 @@ batch:
     slurm:
       interface: ib0
       queue: cpu_pipelines
-      cores: 2
+      cores: 1
       processes: 1
       memory: 48GB
       walltime: "12:00:00"
@@ -39,14 +39,14 @@ batch:
       input:
         catalog_path: <path-to-data-on-mnt>/primary/catalogs/dia_object
         catalog_pattern: "*.parq"
-        files_per_partition: 16
+        files_per_partition: 8
         parquet_metadata_workers: 8
         is_id_in_index: true
         ra_col: ra
         dec_col: dec
       output:
         hats_artifact_name: dia_object_collection
-        target_rows_per_part: 2000000
+        target_rows_per_part: 1000000
       collection:
         catalog:
           artifact_name: dia_object
@@ -58,13 +58,13 @@ batch:
       input:
         catalog_path: <path-to-data-on-mnt>/primary/catalogs/dia_object_forced_source
         catalog_pattern: "*.parq"
-        files_per_partition: 64
+        files_per_partition: 8
         parquet_metadata_workers: 16
         ra_col: coord_ra
         dec_col: coord_dec
       output:
         hats_artifact_name: dia_object_forced_source_collection
-        target_rows_per_part: 8000000
+        target_rows_per_part: 1000000
       collection:
         catalog:
           artifact_name: dia_object_forced_source
@@ -74,13 +74,13 @@ batch:
       input:
         catalog_path: <path-to-data-on-mnt>/primary/catalogs/dia_source
         catalog_pattern: "*.parq"
-        files_per_partition: 2
+        files_per_partition: 1
         parquet_metadata_workers: 8
         ra_col: ra
         dec_col: dec
       output:
         hats_artifact_name: dia_source_collection
-        target_rows_per_part: 1000000
+        target_rows_per_part: 500000
       collection:
         catalog:
           artifact_name: dia_source
@@ -138,14 +138,14 @@ batch:
       input:
         catalog_path: <path-to-data-on-data>/primary/catalogs/object_forced_source
         catalog_pattern: "*.parq"
-        files_per_partition: 32
+        files_per_partition: 8
         parquet_metadata_workers: 16
         ra_col: coord_ra
         dec_col: coord_dec
       output:
         base_path: <path-to-data-on-data>/secondary/catalogs
         hats_artifact_name: object_forced_source_collection
-        target_rows_per_part: 8000000
+        target_rows_per_part: 2000000
       collection:
         catalog:
           artifact_name: object_forced_source
@@ -178,7 +178,7 @@ batch:
         dec_col: coord_dec
       output:
         hats_artifact_name: source_collection
-        target_rows_per_part: 1000000
+        target_rows_per_part: 600000
       collection:
         catalog:
           artifact_name: source
