@@ -374,7 +374,11 @@ def test_prepare_catalog_aligns_file_partition_dtypes_to_meta(monkeypatch, tmp_p
     prepared = prepare_catalog("unused.yml", config=cfg)
     result = prepared.ddf.compute()
 
-    assert result["band"].dtype == meta_input["band"].dtype
+    # Dask may promote pandas object strings to string[pyarrow] according to
+    # dataframe.convert-string.  The computed partition must match the Dask
+    # collection metadata after that normalization, not the pre-Dask pandas
+    # metadata.
+    assert result["band"].dtype == prepared.ddf._meta["band"].dtype
     assert result["band"].tolist() == ["g", "g"]
 
 
