@@ -77,18 +77,6 @@ batch:
           artifact_name: dia_source
           highest_healpix_order: 12
 
-    - name: isolated_star_stellar_motions
-      input:
-        catalog_path: <path-to-data-on-mnt>/primary/catalogs/isolated_star_stellar_motions
-        catalog_pattern: "*.parq"
-        ra_col: ra
-        dec_col: dec
-      output:
-        hats_artifact_name: isolated_star_stellar_motions_collection
-      collection:
-        catalog:
-          artifact_name: isolated_star_stellar_motions
-
     - name: object
       input:
         catalog_path: <path-to-data-on-data>/primary/catalogs/object
