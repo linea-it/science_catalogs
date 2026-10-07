@@ -6,13 +6,147 @@ import sys
 import threading
 import types
 import warnings
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
 from science_catalogs.utils import writers
+
+
+@pytest.mark.parametrize("distributed", [False, True])
+def test_preserved_staging_bounds_batches_and_preserves_rows(tmp_path, distributed):
+    """Write every row once with bounded batches and local oversized-file splitting."""
+    import dask
+    import dask.dataframe as dd
+    from dask import delayed
+
+    reads = []
+
+    @delayed
+    def read_source(index, start, length):
+        reads.append(index)
+        return pd.DataFrame({"value": range(start, start + length)})
+
+    source = dd.from_delayed(
+        [read_source(0, 0, 4), read_source(1, 4, 5), read_source(2, 9, 13)],
+        meta=pd.DataFrame({"value": pd.Series(dtype="int64")}),
+    )
+    batch_sizes = []
+    with ExitStack() as stack:
+        client = None
+        if distributed:
+            from distributed import Client, LocalCluster
+
+            cluster = stack.enter_context(
+                LocalCluster(
+                    n_workers=2,
+                    threads_per_worker=1,
+                    processes=False,
+                    protocol="inproc",
+                    dashboard_address=None,
+                    worker_dashboard_address=None,
+                )
+            )
+            real_client = stack.enter_context(Client(cluster))
+
+            class _Client:
+                def compute(self, tasks):
+                    batch_sizes.append(len(tasks))
+                    return real_client.compute(tasks)
+
+                def gather(self, *args, **kwargs):
+                    return real_client.gather(*args, **kwargs)
+
+            client = _Client()
+        else:
+            stack.enter_context(dask.config.set(scheduler="synchronous"))
+
+        paths = writers.write_partitions(
+            source,
+            {
+                "save_as": "parquet",
+                "target_rows_per_part": 4,
+                "partitioning_mode": "preserve",
+                "staging_max_in_flight_tasks": 2,
+            },
+            str(tmp_path),
+            "demo",
+            client=client,
+        )
+        frames = [pd.read_parquet(path) for path in paths]
+        assert [len(frame) for frame in frames] == [4, 5, 4, 4, 4, 1]
+        assert pd.concat(frames)["value"].tolist() == list(range(22))
+        assert len(set(paths)) == 6
+        if distributed:
+            assert batch_sizes == [2, 1]
+        else:
+            assert sorted(reads) == [0, 1, 2]
+
+
+def test_periodic_progress_stops_on_exception(monkeypatch):
+    """Terminate the progress monitor even when its operation fails."""
+    monkeypatch.setattr(writers, "_PROGRESS_INTERVAL_SECONDS", 0.01)
+    reported = threading.Event()
+    with pytest.raises(RuntimeError, match="abort"):
+        with writers._periodic_progress(reported.set):
+            assert reported.wait(timeout=2)
+            raise RuntimeError("abort")
+    assert not any(thread.name == "catalog-progress" for thread in threading.enumerate())
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        {"partitioning_mode": "unknown"},
+        {"partitioning_mode": "preserve", "order_by": "ra"},
+        {"staging_max_in_flight_tasks": 2},
+        {"partitioning_mode": "preserve", "staging_max_in_flight_tasks": 0},
+        {"partitioning_mode": "preserve", "staging_max_in_flight_tasks": True},
+    ],
+)
+def test_config_rejects_unsafe_staging_options(output):
+    """Require valid limits and avoid batching shared balanced partitions."""
+    from science_catalogs.utils.config import normalize_catalog_config
+
+    with pytest.raises(ValueError, match="partitioning_mode|staging_max_in_flight_tasks|order_by"):
+        normalize_catalog_config({"output": output})
+
+
+def test_preserve_staging_is_kept_when_writing_fails(monkeypatch, tmp_path):
+    """Keep partial files available if bounded staging fails or is interrupted."""
+    monkeypatch.setitem(
+        sys.modules, "hats.io.validation", types.SimpleNamespace(is_valid_collection=lambda path: False)
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hats_import.catalog.file_readers",
+        types.SimpleNamespace(CsvReader=lambda: "csv", ParquetPyarrowReader=lambda: "parquet"),
+    )
+    monkeypatch.setitem(
+        sys.modules, "hats_import.collection.arguments", types.SimpleNamespace(CollectionArguments=object)
+    )
+    monkeypatch.setitem(
+        sys.modules, "hats_import.collection.run_import", types.SimpleNamespace(run=lambda *args: None)
+    )
+
+    def fail_writing(ddf, cfg, data_dir, suffix, **kwargs):
+        (Path(data_dir) / "partial.parquet").touch()
+        raise RuntimeError("staging failed")
+
+    monkeypatch.setattr(writers, "write_partitions", fail_writing)
+    with pytest.raises(RuntimeError, match="staging failed"):
+        writers.write_hats_catalog(
+            pd.DataFrame({"ra": [1.0], "dec": [2.0]}),
+            {"save_as": "hats", "partitioning_mode": "preserve", "staging_max_in_flight_tasks": 2},
+            {},
+            str(tmp_path),
+            "demo",
+            "ra",
+            "dec",
+        )
+    assert len(list(tmp_path.glob(".*_staging_*/partial.parquet"))) == 1
 
 
 @pytest.fixture
@@ -41,6 +175,8 @@ def test_bounded_submit_client_applies_backpressure(monkeypatch):
     submitted = []
 
     class _Future:
+        status = "finished"
+
         def __init__(self):
             self.callbacks = []
 
@@ -83,6 +219,8 @@ def test_bounded_submit_client_applies_backpressure(monkeypatch):
     assert third_submitted.is_set()
     assert not submit_thread.is_alive()
     assert client._unfinished == 2
+    assert client._stages["str"]["submitted"] == 3
+    assert client._stages["str"]["completed"] == 1
 
 
 @pytest.mark.parametrize("fail_import", [False, True])

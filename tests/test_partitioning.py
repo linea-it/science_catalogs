@@ -2,8 +2,25 @@
 
 import dask.dataframe as dd
 import pandas as pd
+import pytest
 
 from science_catalogs.utils.partitioning import reorder_and_rechunk
+
+
+def test_preserve_partitioning_keeps_original_graph(monkeypatch):
+    """Preserve the input graph without row scans or cross-file dependencies."""
+    source = dd.from_pandas(pd.DataFrame({"value": range(10)}), npartitions=2)
+    monkeypatch.setattr(
+        source, "map_partitions", lambda *args, **kwargs: pytest.fail("must not scan partition lengths")
+    )
+    assert reorder_and_rechunk(source, {"target_rows_per_part": 3, "partitioning_mode": "preserve"}) is source
+
+
+def test_preserve_partitioning_rejects_global_ordering():
+    """Do not silently bypass a requested global sort."""
+    source = dd.from_pandas(pd.DataFrame({"value": range(10)}), npartitions=2)
+    with pytest.raises(ValueError, match="does not support"):
+        reorder_and_rechunk(source, {"partitioning_mode": "preserve", "order_by": "value"})
 
 
 def test_rechunk_uses_supplied_partition_counts_without_length_scan(monkeypatch):

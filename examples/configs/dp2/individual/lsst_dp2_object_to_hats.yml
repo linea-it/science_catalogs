@@ -66,14 +66,15 @@ execution:
   dask_connect_timeout: 120s
   dask_tcp_timeout: 300s
   hats_max_in_flight_tasks: 120
+  diagnostics_interval_seconds: 300
   slurm:
     interface: ib0
     queue: cpu_pipelines
     cores: 1
     processes: 1
     memory: 48GB
-    walltime: "12:00:00"
+    walltime: "48:00:00"
     death_timeout: 600
     job_extra_directives:
       - "--account=hpc-pipelines"
-    dask_scale_number: 15
+    dask_scale_number: 30

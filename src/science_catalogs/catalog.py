@@ -25,6 +25,7 @@ from science_catalogs.utils.config import (
     decide_suffix_and_flags,
     normalize_catalog_config,
 )
+from science_catalogs.utils.diagnostics import DEFAULT_DIAGNOSTICS_INTERVAL_SECONDS, cluster_diagnostics
 from science_catalogs.utils.dust import configure_dustmaps_path
 from science_catalogs.utils.io_readers import detect_and_read
 from science_catalogs.utils.partitioning import reorder_and_rechunk
@@ -262,7 +263,10 @@ def _preflight_input_source(cfg: dict[str, Any]) -> dict[str, Any]:
     source["partition_row_counts"] = None
 
     output_cfg = cfg.get("output", {})
-    needs_counts = output_cfg.get("target_rows_per_part") not in (None, False)
+    needs_counts = (
+        output_cfg.get("target_rows_per_part") not in (None, False)
+        and output_cfg.get("partitioning_mode", "balanced") != "preserve"
+    )
     parquet_suffixes = {".parquet", ".pq", ".parq"}
     all_parquet = all(Path(path).suffix.lower() in parquet_suffixes for path in input_files)
     if needs_counts and all_parquet and _processing_preserves_row_count(input_cfg):
@@ -549,7 +553,7 @@ def write_catalog(
             client=client,
             execution_cfg=prepared.config.get("execution", {}),
         )
-    return write_partitions(prepared.ddf, output_cfg, str(output_path), prepared.suffix)
+    return write_partitions(prepared.ddf, output_cfg, str(output_path), prepared.suffix, client=client)
 
 
 def _resolve_output_dir(
@@ -647,7 +651,13 @@ def build_catalog(
 
         results = {}
         single_result = None
-        with _suppress_dask_large_graph_warning():
+        with (
+            _suppress_dask_large_graph_warning(),
+            cluster_diagnostics(
+                client,
+                execution_cfg.get("diagnostics_interval_seconds", DEFAULT_DIAGNOSTICS_INTERVAL_SECONDS),
+            ),
+        ):
             for index, (spec, input_source) in enumerate(
                 zip(plan.catalogs, resolved_sources, strict=True), start=1
             ):

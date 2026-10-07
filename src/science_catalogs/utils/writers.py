@@ -2,14 +2,17 @@
 
 import hashlib
 import logging
+import math
 import os
 import re
 import shutil
 import sys
 import tempfile
 import threading
+import time
 import warnings
 from contextlib import contextmanager
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +27,25 @@ _HATS_PARTITION_INFO_WARNING = "Computing partitions from catalog parquet files.
 _HATS_CLIENT_CLOSE_TIMEOUT_SECONDS = 60
 _DEFAULT_HATS_MAX_IN_FLIGHT_TASKS = 120
 logger = logging.getLogger(__name__)
+_PROGRESS_INTERVAL_SECONDS = 300
+
+
+@contextmanager
+def _periodic_progress(report):
+    """Report from local counters without polling the distributed scheduler."""
+    stopped = threading.Event()
+
+    def monitor():
+        while not stopped.wait(_PROGRESS_INTERVAL_SECONDS):
+            report()
+
+    thread = threading.Thread(target=monitor, name="catalog-progress", daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stopped.set()
+        thread.join()
 
 
 class _SuppressHatsCollectionValidationWarning(logging.Filter):
@@ -78,8 +100,7 @@ def _resolve_materialization_format(output_cfg: dict[str, Any]) -> str:
     return save_as
 
 
-@delayed
-def _write_part(
+def _write_pdf(
     pdf: pd.DataFrame,
     base_dir: str,
     base_suffix: str,
@@ -111,7 +132,28 @@ def _write_part(
     return out_path
 
 
-def write_partitions(ddf_out: dd.DataFrame, output_cfg: dict[str, Any], data_dir: str, suffix: str):
+_write_part = delayed(_write_pdf)
+
+
+@delayed
+def _write_preserved_part(pdf, base_dir, suffix, index, ext, col_for_name, target):
+    # A 25% tolerance avoids splitting files just above the target. Large source
+    # partitions are sliced and written sequentially in the SAME worker task.
+    if target in (None, False) or len(pdf) <= target * 1.25:
+        return (_write_pdf(pdf, base_dir, suffix, index, ext, col_for_name),)
+    chunks = math.ceil(len(pdf) / target)
+    rows = math.ceil(len(pdf) / chunks)
+    return tuple(
+        _write_pdf(
+            pdf.iloc[start : start + rows], base_dir, suffix, f"{index}_chunk{chunk}", ext, col_for_name
+        )
+        for chunk, start in enumerate(range(0, len(pdf), rows))
+    )
+
+
+def write_partitions(
+    ddf_out: dd.DataFrame, output_cfg: dict[str, Any], data_dir: str, suffix: str, *, client=None
+):
     """Write each partition to disk using the configured output format."""
     ext_map = {"parquet": "parquet", "csv": "csv", "hdf5": "h5"}
     ext = ext_map[_resolve_materialization_format(output_cfg)]
@@ -122,11 +164,71 @@ def write_partitions(ddf_out: dd.DataFrame, output_cfg: dict[str, Any], data_dir
         col_for_name = None
 
     delayed_parts = ddf_out.to_delayed()
-    tasks = [
-        _write_part(part, data_dir, suffix, i, ext, col_for_name) for i, part in enumerate(delayed_parts)
-    ]
+    preserve = output_cfg.get("partitioning_mode", "balanced") == "preserve"
+    if preserve:
+        tasks = [
+            _write_preserved_part(
+                part, data_dir, suffix, i, ext, col_for_name, output_cfg.get("target_rows_per_part")
+            )
+            for i, part in enumerate(delayed_parts)
+        ]
+    else:
+        tasks = [
+            _write_part(part, data_dir, suffix, i, ext, col_for_name) for i, part in enumerate(delayed_parts)
+        ]
     logger.info("Writing %d %s partition(s)", len(tasks), ext)
-    written_paths = dask.compute(*tasks)
+    limit = output_cfg.get("staging_max_in_flight_tasks")
+    if limit is not None and not preserve:
+        raise ValueError("Bounded staging requires preserve partitioning to avoid recomputing shared inputs")
+    completed = 0
+    pending = 0
+    started = time.monotonic()
+
+    def report():
+        elapsed = time.monotonic() - started
+        if limit is None:
+            logger.info(
+                "Staging: awaiting completion of %d input partitions, elapsed %.1f min",
+                len(tasks),
+                elapsed / 60,
+            )
+            return
+        logger.info(
+            "Staging progress: %d/%d input partitions completed, %d in current batch, elapsed %.1f min",
+            completed,
+            len(tasks),
+            pending,
+            elapsed / 60,
+        )
+
+    results = []
+    with _periodic_progress(report):
+        if limit is None:
+            pending = len(tasks)
+            results = dask.compute(*tasks)
+        else:
+            logger.info("Bounded staging: at most %d input partitions per batch", limit)
+            for start in range(0, len(tasks), limit):
+                batch = tasks[start : start + limit]
+                pending = len(batch)
+                if client is None:
+                    results.extend(dask.compute(*batch))
+                else:
+                    futures = client.compute(batch)
+                    try:
+                        # Drain the entire batch even if one task fails, before
+                        # allowing the caller to clean up its staging directory.
+                        batch_results = client.gather(futures, errors="skip")
+                        for future in futures:
+                            if future.status != "finished":
+                                future.result()
+                        results.extend(batch_results)
+                    finally:
+                        for future in futures:
+                            future.release()
+                completed += len(batch)
+                pending = 0
+    written_paths = tuple(path for paths in results for path in paths) if preserve else tuple(results)
     logger.info("Finished writing %d partition(s)", len(written_paths))
     return written_paths
 
@@ -152,11 +254,34 @@ class _BoundedSubmitClient:
         self.max_in_flight = max_in_flight
         self._condition = threading.Condition()
         self._unfinished = 0
+        self._stages = {}
 
     def _release_slot(self, _future=None):
         with self._condition:
             self._unfinished -= 1
             self._condition.notify()
+
+    def _task_done(self, stage, future):
+        with self._condition:
+            self._stages[stage]["completed"] += 1
+            if future.status != "finished":
+                self._stages[stage]["failed"] += 1
+            self._release_slot()
+
+    def report_progress(self):
+        with self._condition:
+            stages = {name: dict(counts) for name, counts in self._stages.items()}
+        for name, counts in stages.items():
+            elapsed = time.monotonic() - counts["started"]
+            logger.info(
+                "HATS %s: submitted=%d completed=%d failed/cancelled=%d pending=%d elapsed=%.1f min",
+                name,
+                counts["submitted"],
+                counts["completed"],
+                counts["failed"],
+                counts["submitted"] - counts["completed"],
+                elapsed / 60,
+            )
 
     def submit(self, *args, **kwargs):
         # Reserve a slot before submitting so a fast Future cannot finish before
@@ -167,11 +292,23 @@ class _BoundedSubmitClient:
             while self._unfinished >= self.max_in_flight:
                 self._condition.wait()
             self._unfinished += 1
+            stage = getattr(args[0], "__name__", type(args[0]).__name__)
+            if stage not in self._stages:
+                logger.info("HATS starting task stage: %s", stage)
+                self._stages[stage] = {
+                    "submitted": 0,
+                    "completed": 0,
+                    "failed": 0,
+                    "started": time.monotonic(),
+                }
+            self._stages[stage]["submitted"] += 1
 
         try:
             future = self.client.submit(*args, **kwargs)
-            future.add_done_callback(self._release_slot)
+            future.add_done_callback(partial(self._task_done, stage))
         except BaseException:
+            with self._condition:
+                self._stages[stage]["submitted"] -= 1
             self._release_slot()
             raise
         return future
@@ -275,7 +412,12 @@ def write_hats_catalog(
         if resume_catalog_path is None:
             staging_cfg = dict(output_cfg)
             staging_cfg["save_as"] = source_format
-            written_paths = write_partitions(ddf_out, staging_cfg, str(staging_dir), suffix)
+            # Preserve partial staging on failure/interruption in the new
+            # bounded path, even if some worker writes have not stopped yet.
+            if staging_cfg.get("partitioning_mode") == "preserve":
+                cleanup_staging = False
+            written_paths = write_partitions(ddf_out, staging_cfg, str(staging_dir), suffix, client=client)
+            cleanup_staging = True
 
         if source_format == "parquet":
             file_reader = ParquetPyarrowReader()
@@ -347,8 +489,13 @@ def write_hats_catalog(
             )
             # hats-import uses as_completed() without an explicit loop. Keep its
             # implicit client lookups on the client that owns these Futures.
-            with hats_client.as_current(), _suppress_hats_collection_validation_warning():
+            with (
+                hats_client.as_current(),
+                _suppress_hats_collection_validation_warning(),
+                _periodic_progress(bounded_hats_client.report_progress),
+            ):
                 run(args, bounded_hats_client)
+            bounded_hats_client.report_progress()
             logger.info("HATS collection created: %s", artifact_path)
         except BaseException as exc:
             import_error = exc

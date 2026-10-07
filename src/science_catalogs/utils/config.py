@@ -55,6 +55,8 @@ _OUTPUT_KEYS = {
     "save_as",
     "base_path",
     "target_rows_per_part",
+    "partitioning_mode",
+    "staging_max_in_flight_tasks",
     "order_by",
     "col_for_filename",
     "hats_source_save_as",
@@ -127,10 +129,18 @@ def _validate_execution(execution: dict[str, Any], path: str) -> None:
             "dask_connect_timeout",
             "dask_tcp_timeout",
             "hats_max_in_flight_tasks",
+            "diagnostics_interval_seconds",
         },
         path,
     )
     executor = execution.get("executor", "local")
+    interval = execution.get("diagnostics_interval_seconds", 300)
+    if (
+        isinstance(interval, bool)
+        or not isinstance(interval, (int, float))
+        or not (interval == 0 or 60 <= interval < float("inf"))
+    ):
+        raise ValueError(f"{path}.diagnostics_interval_seconds must be 0 or finite seconds >= 60")
     if executor not in {"local", "slurm"}:
         raise ValueError(f"{path}.executor must be 'local' or 'slurm'")
     _mapping(execution.get("local"), f"{path}.local")
@@ -323,6 +333,17 @@ def validate_catalog_config(cfg: dict[str, Any]) -> None:
         isinstance(target_rows, bool) or not isinstance(target_rows, int) or target_rows <= 0
     ):
         raise ValueError("output.target_rows_per_part must be a positive integer")
+    mode = output.get("partitioning_mode", "balanced")
+    if mode not in {"balanced", "preserve"}:
+        raise ValueError("output.partitioning_mode must be 'balanced' or 'preserve'")
+    if mode == "preserve" and output.get("order_by") not in (None, False, "", []):
+        raise ValueError("output.partitioning_mode='preserve' does not support output.order_by")
+    staging_limit = output.get("staging_max_in_flight_tasks")
+    if staging_limit is not None:
+        if isinstance(staging_limit, bool) or not isinstance(staging_limit, int) or staging_limit <= 0:
+            raise ValueError("output.staging_max_in_flight_tasks must be a positive integer")
+        if mode != "preserve":
+            raise ValueError("output.staging_max_in_flight_tasks requires partitioning_mode='preserve'")
 
     dust = _mapping(cfg.get("dust"), "dust")
     _reject_unknown(

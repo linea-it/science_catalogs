@@ -117,6 +117,49 @@ columns. Temporary files are normally removed after the HATS client has stopped 
 of its work. If that client cannot be stopped safely, the directory is preserved and
 logged rather than being removed while workers may still be reading it.
 
+``output.partitioning_mode`` defaults to ``balanced``, preserving the existing
+global row-balanced repartitioning. The opt-in ``preserve`` mode keeps source
+partitions independent and does not scan their row counts. During writing, inputs
+up to 125% of ``target_rows_per_part`` remain intact; larger inputs are read once
+and split sequentially inside one writer task. Small inputs are never combined.
+This mode does not support ``order_by`` and still requires enough worker memory
+to read each source partition before splitting it.
+
+``output.staging_max_in_flight_tasks`` optionally bounds staging to batches of
+source partitions. It requires ``partitioning_mode: preserve`` so batches do not
+recompute slices of shared source partitions. The DP2 ``source``, ``dia_source``,
+and ``object_shear_all`` examples opt in with batches of 30 inputs; other catalogs
+retain their established execution path. All DP2 examples use 30 one-core workers
+with 48 GB each and a HATS pending-task limit of 120.
+Partial staging is preserved if the new path fails or is interrupted.
+
+Staging and HATS imports log elapsed time every five minutes. Bounded staging
+reports completed input partitions from fully drained batches. HATS reports
+per-function submissions, completions, failed/cancelled tasks, and pending tasks
+from local callbacks, including during submission before upstream progress bars
+appear. Stage starts and normal upstream progress bars remain immediate.
+
+``execution.diagnostics_interval_seconds`` defaults to 300 seconds. Set it to 0
+to disable resource diagnostics, or a finite value of at least 60 seconds to change
+the interval. An initial sample logs every worker's reported local/spill directory
+and memory limit. Periodic samples report cluster RSS, managed and unmanaged memory,
+recent unmanaged memory, current spilled bytes on disk and their in-memory equivalent,
+and the worker with the highest RSS/limit ratio. New worker directories and changes
+in the registered worker set are logged too.
+
+These are scheduler heartbeat metrics, not active worker memory scans. Sampling
+does not trigger garbage collection, rebalance data, inspect files, or change memory
+protections. A diagnostic RPC times out after 10 seconds and failures are warnings
+that do not abort the build. Spill bytes describe currently retained spilled data,
+not cumulative disk I/O. A reported directory does not establish whether its filesystem
+is node-local, and high unmanaged RSS can include memory retained by the allocator.
+
+The DP2 examples request 48 hours for workers. The main SLURM job must also request
+48 hours: changing worker YAML does not change its allocation. A submission template
+is provided at ``examples/configs/dp2/run_to_hats.sbatch``; activate the pipeline
+environment before submitting it with the absolute path to an individual or batch
+YAML. Both requests must be accepted by the cluster's partition/account limits.
+
 For directories containing many small files, ``input.files_per_partition`` groups
 that many files into one Dask partition. The default is 1, which avoids unexpectedly
 combining large or wide files in memory. Increase it explicitly for datasets made of

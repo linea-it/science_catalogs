@@ -100,6 +100,16 @@ def test_dp2_batch_contains_all_positional_non_solar_catalogs():
     assert plan.execution_cfg["hats_max_in_flight_tasks"] == 120
     assert plan.execution_cfg["slurm"]["death_timeout"] == 600
     assert plan.execution_cfg["slurm"]["cores"] == 1
+    assert plan.execution_cfg["slurm"]["walltime"] == "48:00:00"
+    assert plan.execution_cfg["slurm"]["dask_scale_number"] == 30
+    assert plan.execution_cfg["diagnostics_interval_seconds"] == 300
+    preserved = {"source", "dia_source", "object_shear_all"}
+    for name in preserved:
+        assert configs[name]["output"]["partitioning_mode"] == "preserve"
+        assert configs[name]["output"]["staging_max_in_flight_tasks"] == 30
+    assert all(
+        "partitioning_mode" not in cfg["output"] for name, cfg in configs.items() if name not in preserved
+    )
     assert configs["object"]["photometry"]["enabled"] is True
     assert len(configs["object"]["photometry"]["measurements"]) == 2
     assert configs["dia_object"]["collection"]["indexes"] == [

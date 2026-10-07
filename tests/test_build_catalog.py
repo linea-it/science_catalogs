@@ -23,6 +23,12 @@ class _FakeClient:
     def run(self, func):
         func()
 
+    def sync(self, func, *args, **kwargs):
+        return func(*args)
+
+    def _run_on_scheduler(self, func):
+        return func(type("Scheduler", (), {"workers": {}})())
+
     def wait_for_workers(self, n_workers, timeout=None):
         self.waited_for = (n_workers, timeout)
         type(self).last_waited_for = self.waited_for

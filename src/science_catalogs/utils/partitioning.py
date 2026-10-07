@@ -18,6 +18,12 @@ def reorder_and_rechunk(
     """Sort and repartition a Dask dataframe according to output config."""
     has_target = output_cfg.get("target_rows_per_part") not in (None, False)
     has_order = output_cfg.get("order_by") not in (None, False, "", [])
+    if output_cfg.get("partitioning_mode", "balanced") == "preserve":
+        if has_order:
+            raise ValueError("preserve partitioning does not support output.order_by")
+        # Split oversized inputs inside their writer task, after reading once.
+        # Do not introduce cross-file concatenation or sliced-source dependencies.
+        return ddf
 
     order_cols: list[str] | None = None
     if has_order:
