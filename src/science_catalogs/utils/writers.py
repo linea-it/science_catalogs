@@ -160,8 +160,8 @@ class _BoundedSubmitClient:
 
     def submit(self, *args, **kwargs):
         # Reserve a slot before submitting so a fast Future cannot finish before
-        # it is included in the count.  Future callbacks run on the Dask client's
-        # event-loop thread and only perform this small, thread-safe notification;
+        # it is included in the count. Future callbacks run in Dask's callback
+        # executor and only perform this small, thread-safe notification;
         # unlike distributed.wait(), this creates no asyncio waiter per Future.
         with self._condition:
             while self._unfinished >= self.max_in_flight:
@@ -345,7 +345,9 @@ def write_hats_catalog(
                 artifact_name,
                 max_in_flight,
             )
-            with _suppress_hats_collection_validation_warning():
+            # hats-import uses as_completed() without an explicit loop. Keep its
+            # implicit client lookups on the client that owns these Futures.
+            with hats_client.as_current(), _suppress_hats_collection_validation_warning():
                 run(args, bounded_hats_client)
             logger.info("HATS collection created: %s", artifact_path)
         except BaseException as exc:

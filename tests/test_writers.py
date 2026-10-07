@@ -6,6 +6,7 @@ import sys
 import threading
 import types
 import warnings
+from contextlib import nullcontext
 from pathlib import Path
 
 import pandas as pd
@@ -24,6 +25,9 @@ def isolated_hats_client(monkeypatch):
 
         def close(self, timeout=None):
             self.closed = True
+
+        def as_current(self):
+            return nullcontext(self)
 
     fake_client = _FakeClient()
     monkeypatch.setattr(writers, "_create_hats_client", lambda client: fake_client)
@@ -79,6 +83,96 @@ def test_bounded_submit_client_applies_backpressure(monkeypatch):
     assert third_submitted.is_set()
     assert not submit_thread.is_alive()
     assert client._unfinished == 2
+
+
+@pytest.mark.parametrize("fail_import", [False, True])
+def test_write_hats_catalog_uses_dedicated_client_loop(monkeypatch, tmp_path, fail_import):
+    """HATS implicit waits use the Future owner's loop and restore the original client."""
+    from distributed import Client, LocalCluster, as_completed, default_client
+
+    class _Arguments:
+        def __init__(self, **kwargs):
+            self.tqdm_kwargs = {}
+
+        def catalog(self, **kwargs):
+            return self
+
+        def add_margin(self, **kwargs):
+            return self
+
+    captured = {}
+
+    def run_import(args, client):
+        dedicated = client.client
+        captured["dedicated"] = dedicated
+        assert dedicated is not original
+        assert dedicated.loop is not original.loop
+        assert default_client() is dedicated
+
+        def task(value):
+            import time
+
+            time.sleep(0.05)
+            return value
+
+        # Use real Futures and the callback-based limiter, including submissions
+        # past the bound, then use the same implicit as_completed call as HATS.
+        futures = [client.submit(task, value, pure=False) for value in range(6)]
+        completed = as_completed(futures, timeout=10)
+        assert completed.loop is dedicated.loop
+        assert sorted(future.result() for future in completed) == list(range(6))
+        if fail_import:
+            raise RuntimeError("import failed after mapping")
+
+    monkeypatch.setitem(
+        sys.modules, "hats.io.validation", types.SimpleNamespace(is_valid_collection=lambda path: False)
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hats_import.catalog.file_readers",
+        types.SimpleNamespace(CsvReader=lambda: "csv", ParquetPyarrowReader=lambda: "parquet"),
+    )
+    monkeypatch.setitem(
+        sys.modules, "hats_import.collection.arguments", types.SimpleNamespace(CollectionArguments=_Arguments)
+    )
+    monkeypatch.setitem(
+        sys.modules, "hats_import.collection.run_import", types.SimpleNamespace(run=run_import)
+    )
+    monkeypatch.setattr(
+        writers, "write_partitions", lambda *args, **kwargs: [str(tmp_path / "part0.parquet")]
+    )
+
+    # In-process transport needs no network binding, while the two clients still
+    # have distinct event loops, as in the SLURM execution.
+    with (
+        LocalCluster(
+            n_workers=1,
+            threads_per_worker=1,
+            processes=False,
+            protocol="inproc",
+            dashboard_address=None,
+            worker_dashboard_address=None,
+        ) as cluster,
+        Client(cluster) as original,
+    ):
+        expected = (
+            pytest.raises(RuntimeError, match="import failed after mapping") if fail_import else nullcontext()
+        )
+        with expected:
+            writers.write_hats_catalog(
+                pd.DataFrame({"ra": [1.0], "dec": [2.0]}),
+                {"save_as": "hats", "hats_artifact_name": "demo"},
+                {},
+                str(tmp_path),
+                "_demo",
+                "ra",
+                "dec",
+                client=original,
+                execution_cfg={"hats_max_in_flight_tasks": 2},
+            )
+        assert default_client() is original
+        assert original.status == "running"
+        assert captured["dedicated"].status == "closed"
 
 
 def test_write_hats_catalog_resumes_margin_from_valid_primary(monkeypatch, tmp_path, isolated_hats_client):
@@ -381,6 +475,9 @@ def test_write_hats_catalog_preserves_staging_when_client_cannot_close(monkeypat
             return self
 
     class _UnclosableClient:
+        def as_current(self):
+            return nullcontext(self)
+
         def close(self, timeout=None):
             raise TimeoutError("scheduler did not acknowledge client close")
 
