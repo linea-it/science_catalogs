@@ -7,8 +7,10 @@ from science_catalogs import cli
 
 def test_cli_routes_progress_logs_to_stdout_and_warnings_to_stderr(monkeypatch, capsys):
     """Route progress logs to stdout while keeping warnings and errors on stderr."""
+    calls = {}
 
-    def fake_build_catalog(config_path, output_dir, output_format=None):
+    def fake_build_catalog(config_path, output_dir, output_format=None, **kwargs):
+        calls.update(kwargs)
         logger = logging.getLogger("science_catalogs.test")
         logger.info("pipeline progress")
         logger.warning("pipeline warning")
@@ -25,6 +27,26 @@ def test_cli_routes_progress_logs_to_stdout_and_warnings_to_stderr(monkeypatch, 
     assert "pipeline progress" not in captured.err
     assert "pipeline warning" in captured.err
     assert "pipeline error" in captured.err
+    assert calls["require_output_path"] is True
+
+
+def test_cli_suppresses_verbose_dependency_info_logs(monkeypatch, capsys):
+    """Keep dependency chatter out while preserving dependency warnings."""
+
+    def fake_build_catalog(config_path, output_dir, output_format=None, **kwargs):
+        logging.getLogger("distributed.scheduler").info("scheduler chatter")
+        logging.getLogger("distributed.scheduler").warning("scheduler warning")
+        return f"{output_dir}/part0.parquet"
+
+    monkeypatch.setattr(cli, "build_catalog", fake_build_catalog)
+    monkeypatch.setattr("sys.argv", ["science-catalogs", "config.yml", "/tmp/out"])
+
+    cli.main()
+
+    captured = capsys.readouterr()
+    assert "scheduler chatter" not in captured.out
+    assert "scheduler chatter" not in captured.err
+    assert "scheduler warning" in captured.err
 
 
 def test_cli_parquet_output(monkeypatch, capsys):
@@ -32,7 +54,7 @@ def test_cli_parquet_output(monkeypatch, capsys):
     monkeypatch.setattr(
         cli,
         "build_catalog",
-        lambda config_path, output_dir, output_format=None: (
+        lambda config_path, output_dir, output_format=None, **kwargs: (
             f"{output_dir}/part0.parquet",
             f"{output_dir}/part1.parquet",
         ),
@@ -52,7 +74,7 @@ def test_cli_hats_output(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(
         cli,
         "build_catalog",
-        lambda config_path, output_dir, output_format=None: f"{output_dir}/demo_collection",
+        lambda config_path, output_dir, output_format=None, **kwargs: f"{output_dir}/demo_collection",
     )
     monkeypatch.setattr(
         "sys.argv",
@@ -62,3 +84,23 @@ def test_cli_hats_output(monkeypatch, capsys, tmp_path):
     cli.main()
     out = capsys.readouterr().out
     assert f"Wrote artifact to {tmp_path}/demo_collection" in out
+
+
+def test_cli_batch_output(monkeypatch, capsys, tmp_path):
+    """Report each named artifact returned by a batch build."""
+    monkeypatch.setattr(
+        cli,
+        "build_catalog",
+        lambda config_path, output_dir, output_format=None, **kwargs: {
+            "object": f"{output_dir}/object_collection",
+            "source": f"{output_dir}/source_collection",
+        },
+    )
+    monkeypatch.setattr("sys.argv", ["science-catalogs", "batch.yml", str(tmp_path)])
+
+    cli.main()
+
+    out = capsys.readouterr().out
+    assert "Wrote 2 catalogs" in out
+    assert f"object: {tmp_path}/object_collection" in out
+    assert f"source: {tmp_path}/source_collection" in out

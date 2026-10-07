@@ -9,10 +9,21 @@ from dask import dataframe as dd
 from dask import delayed
 
 
-def reorder_and_rechunk(ddf: dd.DataFrame, output_cfg: dict[str, Any]):
+def reorder_and_rechunk(
+    ddf: dd.DataFrame,
+    output_cfg: dict[str, Any],
+    *,
+    partition_row_counts: list[int] | None = None,
+):
     """Sort and repartition a Dask dataframe according to output config."""
     has_target = output_cfg.get("target_rows_per_part") not in (None, False)
     has_order = output_cfg.get("order_by") not in (None, False, "", [])
+    if output_cfg.get("partitioning_mode", "balanced") == "preserve":
+        if has_order:
+            raise ValueError("preserve partitioning does not support output.order_by")
+        # Split oversized inputs inside their writer task, after reading once.
+        # Do not introduce cross-file concatenation or sliced-source dependencies.
+        return ddf
 
     order_cols: list[str] | None = None
     if has_order:
@@ -47,7 +58,12 @@ def reorder_and_rechunk(ddf: dd.DataFrame, output_cfg: dict[str, Any]):
     if not has_target:
         return ddf_in
 
-    part_lengths = np.asarray(ddf_in.map_partitions(len).compute(), dtype=int)
+    if partition_row_counts is not None and not has_order:
+        if len(partition_row_counts) != ddf_in.npartitions:
+            raise ValueError("partition_row_counts must match the number of Dask partitions")
+        part_lengths = np.asarray(partition_row_counts, dtype=int)
+    else:
+        part_lengths = np.asarray(ddf_in.map_partitions(len).compute(), dtype=int)
     total_rows = int(part_lengths.sum())
     target_rows = int(output_cfg.get("target_rows_per_part"))
     n_parts = max(1, math.ceil(total_rows / target_rows))

@@ -21,7 +21,10 @@ class _MaxLevelFilter(logging.Filter):
 
 def _configure_logging():
     """Route progress logs to stdout and warnings/errors to stderr."""
-    formatter = logging.Formatter("%(levelname)s:%(name)s:%(message)s")
+    formatter = logging.Formatter(
+        "%(asctime)s | %(levelname)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
 
     stdout_handler = logging.StreamHandler(sys.stdout)
     stdout_handler.setLevel(logging.INFO)
@@ -38,6 +41,11 @@ def _configure_logging():
         force=True,
     )
     logging.captureWarnings(True)
+
+    # Keep the terminal focused on pipeline milestones. Warnings and errors
+    # from these dependencies still go to stderr through the root handlers.
+    for logger_name in ("bokeh", "dask", "distributed", "numexpr"):
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
 
 
 def main():
@@ -67,9 +75,17 @@ def main():
         args.config_path,
         output_dir=args.output_dir,
         output_format=args.output_format,
+        require_output_path=True,
     )
 
-    if isinstance(result, tuple):
+    if isinstance(result, dict):
+        print(f"Wrote {len(result)} catalogs")
+        for name, path in result.items():
+            if isinstance(path, tuple):
+                print(f"  {name}: {len(path)} partition files")
+            else:
+                print(f"  {name}: {path}")
+    elif isinstance(result, tuple):
         print(f"Wrote {len(result)} partition files")
     else:
         print(f"Wrote artifact to {result}")
