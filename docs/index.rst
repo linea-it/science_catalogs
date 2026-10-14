@@ -34,7 +34,7 @@ For development:
 .. code-block:: console
 
    pip install -e '.[dev]'
-   pre-commit install
+   pre-commit install --hook-type pre-commit --hook-type pre-push
 
 Quick example
 ----------------------------------------------------------------------------------------
@@ -69,5 +69,6 @@ See :doc:`quickstart` for the example flow.
 
    Home page <self>
    Quickstart <quickstart>
+   Configuration <configuration>
    API Reference <autoapi/index>
    Notebooks <notebooks>

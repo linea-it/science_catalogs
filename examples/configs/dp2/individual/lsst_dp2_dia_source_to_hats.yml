@@ -1,0 +1,52 @@
+# Run example:
+# science-catalogs examples/configs/dp2/individual/lsst_dp2_dia_source_to_hats.yml
+
+metadata:
+  release: LSST_DP2
+
+input:
+  catalog_path: <path-to-data-on-mnt>/primary/catalogs/dia_source
+  catalog_pattern: "*.parq"
+  files_per_partition: 1
+  parquet_metadata_workers: 8
+  ra_col: ra
+  dec_col: dec
+
+photometry:
+  enabled: false
+
+output:
+  base_path: <path-to-data-on-mnt>/secondary/catalogs
+  save_as: hats
+  hats_artifact_name: dia_source_collection
+  on_existing: error
+  target_rows_per_part: 500000
+  partitioning_mode: preserve
+  staging_max_in_flight_tasks: 30
+
+collection:
+  catalog:
+    artifact_name: dia_source
+    pixel_threshold: 1000000
+    highest_healpix_order: 12
+  margin:
+    threshold_arcsec: 5.0
+
+execution:
+  executor: slurm
+  worker_wait_timeout: 900
+  dask_connect_timeout: 120s
+  dask_tcp_timeout: 300s
+  hats_max_in_flight_tasks: 120
+  diagnostics_interval_seconds: 300
+  slurm:
+    interface: ib0
+    queue: cpu_pipelines
+    cores: 1
+    processes: 1
+    memory: 48GB
+    walltime: "48:00:00"
+    death_timeout: 600
+    job_extra_directives:
+      - "--account=hpc-pipelines"
+    dask_scale_number: 30

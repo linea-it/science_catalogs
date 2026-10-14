@@ -1,15 +1,390 @@
 """Tests for catalog output writers."""
 
 import logging
+import shutil
 import sys
+import threading
 import types
 import warnings
+from contextlib import ExitStack, nullcontext
+from pathlib import Path
 
 import pandas as pd
+import pytest
+
 from science_catalogs.utils import writers
 
 
-def test_write_hats_catalog_marks_margin_as_default(monkeypatch, tmp_path):
+@pytest.mark.parametrize("distributed", [False, True])
+def test_preserved_staging_bounds_batches_and_preserves_rows(tmp_path, distributed):
+    """Write every row once with bounded batches and local oversized-file splitting."""
+    import dask
+    import dask.dataframe as dd
+    from dask import delayed
+
+    reads = []
+
+    @delayed
+    def read_source(index, start, length):
+        reads.append(index)
+        return pd.DataFrame({"value": range(start, start + length)})
+
+    source = dd.from_delayed(
+        [read_source(0, 0, 4), read_source(1, 4, 5), read_source(2, 9, 13)],
+        meta=pd.DataFrame({"value": pd.Series(dtype="int64")}),
+    )
+    batch_sizes = []
+    with ExitStack() as stack:
+        client = None
+        if distributed:
+            from distributed import Client, LocalCluster
+
+            cluster = stack.enter_context(
+                LocalCluster(
+                    n_workers=2,
+                    threads_per_worker=1,
+                    processes=False,
+                    protocol="inproc",
+                    dashboard_address=None,
+                    worker_dashboard_address=None,
+                )
+            )
+            real_client = stack.enter_context(Client(cluster))
+
+            class _Client:
+                def compute(self, tasks):
+                    batch_sizes.append(len(tasks))
+                    return real_client.compute(tasks)
+
+                def gather(self, *args, **kwargs):
+                    return real_client.gather(*args, **kwargs)
+
+            client = _Client()
+        else:
+            stack.enter_context(dask.config.set(scheduler="synchronous"))
+
+        paths = writers.write_partitions(
+            source,
+            {
+                "save_as": "parquet",
+                "target_rows_per_part": 4,
+                "partitioning_mode": "preserve",
+                "staging_max_in_flight_tasks": 2,
+            },
+            str(tmp_path),
+            "demo",
+            client=client,
+        )
+        frames = [pd.read_parquet(path) for path in paths]
+        assert [len(frame) for frame in frames] == [4, 5, 4, 4, 4, 1]
+        assert pd.concat(frames)["value"].tolist() == list(range(22))
+        assert len(set(paths)) == 6
+        if distributed:
+            assert batch_sizes == [2, 1]
+        else:
+            assert sorted(reads) == [0, 1, 2]
+
+
+def test_periodic_progress_stops_on_exception(monkeypatch):
+    """Terminate the progress monitor even when its operation fails."""
+    monkeypatch.setattr(writers, "_PROGRESS_INTERVAL_SECONDS", 0.01)
+    reported = threading.Event()
+    with pytest.raises(RuntimeError, match="abort"):
+        with writers._periodic_progress(reported.set):
+            assert reported.wait(timeout=2)
+            raise RuntimeError("abort")
+    assert not any(thread.name == "catalog-progress" for thread in threading.enumerate())
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        {"partitioning_mode": "unknown"},
+        {"partitioning_mode": "preserve", "order_by": "ra"},
+        {"staging_max_in_flight_tasks": 2},
+        {"partitioning_mode": "preserve", "staging_max_in_flight_tasks": 0},
+        {"partitioning_mode": "preserve", "staging_max_in_flight_tasks": True},
+    ],
+)
+def test_config_rejects_unsafe_staging_options(output):
+    """Require valid limits and avoid batching shared balanced partitions."""
+    from science_catalogs.utils.config import normalize_catalog_config
+
+    with pytest.raises(ValueError, match="partitioning_mode|staging_max_in_flight_tasks|order_by"):
+        normalize_catalog_config({"output": output})
+
+
+def test_preserve_staging_is_kept_when_writing_fails(monkeypatch, tmp_path):
+    """Keep partial files available if bounded staging fails or is interrupted."""
+    monkeypatch.setitem(
+        sys.modules, "hats.io.validation", types.SimpleNamespace(is_valid_collection=lambda path: False)
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hats_import.catalog.file_readers",
+        types.SimpleNamespace(CsvReader=lambda: "csv", ParquetPyarrowReader=lambda: "parquet"),
+    )
+    monkeypatch.setitem(
+        sys.modules, "hats_import.collection.arguments", types.SimpleNamespace(CollectionArguments=object)
+    )
+    monkeypatch.setitem(
+        sys.modules, "hats_import.collection.run_import", types.SimpleNamespace(run=lambda *args: None)
+    )
+
+    def fail_writing(ddf, cfg, data_dir, suffix, **kwargs):
+        (Path(data_dir) / "partial.parquet").touch()
+        raise RuntimeError("staging failed")
+
+    monkeypatch.setattr(writers, "write_partitions", fail_writing)
+    with pytest.raises(RuntimeError, match="staging failed"):
+        writers.write_hats_catalog(
+            pd.DataFrame({"ra": [1.0], "dec": [2.0]}),
+            {"save_as": "hats", "partitioning_mode": "preserve", "staging_max_in_flight_tasks": 2},
+            {},
+            str(tmp_path),
+            "demo",
+            "ra",
+            "dec",
+        )
+    assert len(list(tmp_path.glob(".*_staging_*/partial.parquet"))) == 1
+
+
+@pytest.fixture
+def isolated_hats_client(monkeypatch):
+    """Avoid opening a real distributed client in writer unit tests."""
+
+    class _FakeClient:
+        def __init__(self):
+            self.closed = False
+
+        def close(self, timeout=None):
+            self.closed = True
+
+        def as_current(self):
+            return nullcontext(self)
+
+    fake_client = _FakeClient()
+    monkeypatch.setattr(writers, "_create_hats_client", lambda client: fake_client)
+    return fake_client
+
+
+def test_bounded_submit_client_applies_backpressure(monkeypatch):
+    """Block submission at the bound and resume it from a Future callback."""
+    import distributed
+
+    submitted = []
+
+    class _Future:
+        status = "finished"
+
+        def __init__(self):
+            self.callbacks = []
+
+        def add_done_callback(self, callback):
+            self.callbacks.append(callback)
+
+        def finish(self):
+            for callback in self.callbacks:
+                callback(self)
+
+    class _Client:
+        def submit(self, value):
+            future = _Future()
+            submitted.append((value, future))
+            return future
+
+    monkeypatch.setattr(
+        distributed,
+        "wait",
+        lambda *args, **kwargs: pytest.fail("backpressure must not create Dask waiters"),
+    )
+    client = writers._BoundedSubmitClient(_Client(), max_in_flight=2)
+
+    client.submit("first")
+    client.submit("second")
+    third_submitted = threading.Event()
+
+    def submit_third():
+        client.submit("third")
+        third_submitted.set()
+
+    submit_thread = threading.Thread(target=submit_third)
+    submit_thread.start()
+
+    assert not third_submitted.wait(timeout=0.05)
+    submitted[0][1].finish()
+    submit_thread.join(timeout=1)
+
+    assert len(submitted) == 3
+    assert third_submitted.is_set()
+    assert not submit_thread.is_alive()
+    assert client._unfinished == 2
+    assert client._stages["str"]["submitted"] == 3
+    assert client._stages["str"]["completed"] == 1
+
+
+@pytest.mark.parametrize("fail_import", [False, True])
+def test_write_hats_catalog_uses_dedicated_client_loop(monkeypatch, tmp_path, fail_import):
+    """HATS implicit waits use the Future owner's loop and restore the original client."""
+    from distributed import Client, LocalCluster, as_completed, default_client
+
+    class _Arguments:
+        def __init__(self, **kwargs):
+            self.tqdm_kwargs = {}
+
+        def catalog(self, **kwargs):
+            return self
+
+        def add_margin(self, **kwargs):
+            return self
+
+    captured = {}
+
+    def run_import(args, client):
+        dedicated = client.client
+        captured["dedicated"] = dedicated
+        assert dedicated is not original
+        assert dedicated.loop is not original.loop
+        assert default_client() is dedicated
+
+        def task(value):
+            import time
+
+            time.sleep(0.05)
+            return value
+
+        # Use real Futures and the callback-based limiter, including submissions
+        # past the bound, then use the same implicit as_completed call as HATS.
+        futures = [client.submit(task, value, pure=False) for value in range(6)]
+        completed = as_completed(futures, timeout=10)
+        assert completed.loop is dedicated.loop
+        assert sorted(future.result() for future in completed) == list(range(6))
+        if fail_import:
+            raise RuntimeError("import failed after mapping")
+
+    monkeypatch.setitem(
+        sys.modules, "hats.io.validation", types.SimpleNamespace(is_valid_collection=lambda path: False)
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hats_import.catalog.file_readers",
+        types.SimpleNamespace(CsvReader=lambda: "csv", ParquetPyarrowReader=lambda: "parquet"),
+    )
+    monkeypatch.setitem(
+        sys.modules, "hats_import.collection.arguments", types.SimpleNamespace(CollectionArguments=_Arguments)
+    )
+    monkeypatch.setitem(
+        sys.modules, "hats_import.collection.run_import", types.SimpleNamespace(run=run_import)
+    )
+    monkeypatch.setattr(
+        writers, "write_partitions", lambda *args, **kwargs: [str(tmp_path / "part0.parquet")]
+    )
+
+    # In-process transport needs no network binding, while the two clients still
+    # have distinct event loops, as in the SLURM execution.
+    with (
+        LocalCluster(
+            n_workers=1,
+            threads_per_worker=1,
+            processes=False,
+            protocol="inproc",
+            dashboard_address=None,
+            worker_dashboard_address=None,
+        ) as cluster,
+        Client(cluster) as original,
+    ):
+        expected = (
+            pytest.raises(RuntimeError, match="import failed after mapping") if fail_import else nullcontext()
+        )
+        with expected:
+            writers.write_hats_catalog(
+                pd.DataFrame({"ra": [1.0], "dec": [2.0]}),
+                {"save_as": "hats", "hats_artifact_name": "demo"},
+                {},
+                str(tmp_path),
+                "_demo",
+                "ra",
+                "dec",
+                client=original,
+                execution_cfg={"hats_max_in_flight_tasks": 2},
+            )
+        assert default_client() is original
+        assert original.status == "running"
+        assert captured["dedicated"].status == "closed"
+
+
+def test_write_hats_catalog_resumes_margin_from_valid_primary(monkeypatch, tmp_path, isolated_hats_client):
+    """Resume an incomplete collection without rebuilding its valid primary catalog."""
+    artifact_path = tmp_path / "demo"
+    primary_path = artifact_path / "catalog"
+    primary_path.mkdir(parents=True)
+    captured = {}
+
+    class _FakeCollectionArguments:
+        def __init__(self, **kwargs):
+            self.tqdm_kwargs = kwargs.get("tqdm_kwargs") or {}
+
+        def catalog(self, **kwargs):
+            captured["catalog"] = kwargs
+            return self
+
+        def add_margin(self, **kwargs):
+            captured["margin"] = kwargs
+            return self
+
+    monkeypatch.setitem(
+        sys.modules,
+        "hats.io.validation",
+        types.SimpleNamespace(
+            is_valid_collection=lambda path: False,
+            is_valid_catalog=lambda path: Path(path) == primary_path,
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hats_import.catalog.file_readers",
+        types.SimpleNamespace(CsvReader=lambda: "csv", ParquetPyarrowReader=lambda: "parquet"),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hats_import.collection.arguments",
+        types.SimpleNamespace(CollectionArguments=_FakeCollectionArguments),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hats_import.collection.run_import",
+        types.SimpleNamespace(run=lambda args, client: captured.update(run_client=client)),
+    )
+    monkeypatch.setattr(
+        writers,
+        "write_partitions",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("staging should not be rebuilt when the primary catalog is valid")
+        ),
+    )
+
+    result = writers.write_hats_catalog(
+        pd.DataFrame({"ra": [1.0], "dec": [2.0]}),
+        {"save_as": "hats", "hats_artifact_name": "demo", "on_existing": "reuse"},
+        {"catalog": {"artifact_name": "catalog"}},
+        str(tmp_path),
+        "_demo",
+        "ra",
+        "dec",
+        client="fake_client",
+        execution_cfg={"hats_max_in_flight_tasks": 250},
+    )
+
+    assert result == (str(artifact_path),)
+    assert captured["catalog"] == {
+        "output_artifact_name": "catalog",
+        "catalog_path": str(primary_path),
+    }
+    assert captured["run_client"].max_in_flight == 250
+    assert isolated_hats_client.closed is True
+
+
+def test_write_hats_catalog_marks_margin_as_default(monkeypatch, tmp_path, isolated_hats_client):
     """Pass is_default=True when creating the HATS margin catalog."""
     captured = {}
 
@@ -24,6 +399,10 @@ def test_write_hats_catalog_marks_margin_as_default(monkeypatch, tmp_path):
 
         def add_margin(self, **kwargs):
             captured["margin"] = kwargs
+            return self
+
+        def add_index(self, **kwargs):
+            captured.setdefault("indexes", []).append(kwargs)
             return self
 
     fake_validation = types.SimpleNamespace(is_valid_collection=lambda path: False)
@@ -45,7 +424,7 @@ def test_write_hats_catalog_marks_margin_as_default(monkeypatch, tmp_path):
     writers.write_hats_catalog(
         pd.DataFrame({"ra": [1.0], "dec": [2.0]}),
         {"save_as": "hats", "hats_artifact_name": "demo"},
-        {"margin_threshold": 5.0},
+        {},
         str(tmp_path),
         "_demo",
         "ra",
@@ -55,9 +434,90 @@ def test_write_hats_catalog_marks_margin_as_default(monkeypatch, tmp_path):
 
     assert captured["margin"]["margin_threshold"] == 5.0
     assert captured["margin"]["is_default"] is True
+    assert captured["run_client"].client is isolated_hats_client
+    assert captured["run_client"].max_in_flight == 120
+    assert isolated_hats_client.closed is True
 
 
-def test_write_hats_catalog_routes_tqdm_progress_to_stdout(monkeypatch, tmp_path, capsys):
+def test_write_hats_catalog_adds_configured_indexes(monkeypatch, tmp_path, isolated_hats_client):
+    """Create collection index catalogs from the canonical collection config."""
+    captured = {}
+
+    class _FakeCollectionArguments:
+        def __init__(self, **kwargs):
+            self.tqdm_kwargs = kwargs.get("tqdm_kwargs") or {}
+
+        def catalog(self, **kwargs):
+            captured["catalog"] = kwargs
+            return self
+
+        def add_margin(self, **kwargs):
+            return self
+
+        def add_index(self, **kwargs):
+            captured.setdefault("indexes", []).append(kwargs)
+            return self
+
+    monkeypatch.setitem(
+        sys.modules,
+        "hats.io.validation",
+        types.SimpleNamespace(is_valid_collection=lambda path: False),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hats_import.catalog.file_readers",
+        types.SimpleNamespace(CsvReader=lambda: "csv", ParquetPyarrowReader=lambda: "parquet"),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hats_import.collection.arguments",
+        types.SimpleNamespace(CollectionArguments=_FakeCollectionArguments),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hats_import.collection.run_import",
+        types.SimpleNamespace(run=lambda args, client: None),
+    )
+    monkeypatch.setattr(
+        writers, "write_partitions", lambda *args, **kwargs: [str(tmp_path / "part0.parquet")]
+    )
+
+    writers.write_hats_catalog(
+        pd.DataFrame({"objectId": [1], "ra": [1.0], "dec": [2.0]}),
+        {"save_as": "hats", "hats_artifact_name": "demo"},
+        {
+            "catalog": {
+                "artifact_name": "object_lc",
+                "pixel_threshold": 2_000_000,
+                "highest_healpix_order": 12,
+            },
+            "margin": {"threshold_arcsec": 5.0},
+            "indexes": [{"column": "objectId", "drop_duplicates": False}],
+        },
+        str(tmp_path),
+        "_demo",
+        "ra",
+        "dec",
+        client="fake_client",
+    )
+
+    assert captured["catalog"]["output_artifact_name"] == "object_lc"
+    assert captured["catalog"]["pixel_threshold"] == 2_000_000
+    assert captured["catalog"]["highest_healpix_order"] == 12
+    assert captured["indexes"] == [
+        {
+            "indexing_column": "objectId",
+            "drop_duplicates": False,
+            "include_healpix_29": True,
+            "include_order_pixel": True,
+            "include_radec": False,
+        }
+    ]
+
+
+def test_write_hats_catalog_routes_tqdm_progress_to_stdout(
+    monkeypatch, tmp_path, capsys, isolated_hats_client
+):
     """Route HATS import progress bars to stdout without moving warnings."""
     captured = {}
 
@@ -115,7 +575,98 @@ def test_write_hats_catalog_routes_tqdm_progress_to_stdout(monkeypatch, tmp_path
     assert captured["collection"]["tqdm_kwargs"]["file"] is sys.stdout
 
 
-def test_write_hats_catalog_reuses_existing_collection(monkeypatch, tmp_path):
+def test_create_hats_client_connects_to_existing_scheduler(monkeypatch):
+    """Use a separate client identity while sharing the existing scheduler."""
+    captured = {}
+
+    class _ExternalClient:
+        def scheduler_info(self):
+            return {"address": "tcp://scheduler:8786"}
+
+    def fake_client(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return "isolated-client"
+
+    monkeypatch.setitem(sys.modules, "distributed", types.SimpleNamespace(Client=fake_client))
+
+    result = writers._create_hats_client(_ExternalClient())
+
+    assert result == "isolated-client"
+    assert captured == {
+        "args": ("tcp://scheduler:8786",),
+        "kwargs": {"set_as_default": False},
+    }
+
+
+def test_write_hats_catalog_preserves_staging_when_client_cannot_close(monkeypatch, tmp_path, caplog):
+    """Never remove staging while HATS tasks may still be using it."""
+
+    class _FakeCollectionArguments:
+        def __init__(self, **kwargs):
+            self.tqdm_kwargs = kwargs.get("tqdm_kwargs") or {}
+
+        def catalog(self, **kwargs):
+            return self
+
+        def add_margin(self, **kwargs):
+            return self
+
+    class _UnclosableClient:
+        def as_current(self):
+            return nullcontext(self)
+
+        def close(self, timeout=None):
+            raise TimeoutError("scheduler did not acknowledge client close")
+
+    def fail_import(args, client):
+        raise RuntimeError("import failed")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "hats.io.validation",
+        types.SimpleNamespace(is_valid_collection=lambda path: False),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hats_import.catalog.file_readers",
+        types.SimpleNamespace(CsvReader=lambda: "csv", ParquetPyarrowReader=lambda: "parquet"),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hats_import.collection.arguments",
+        types.SimpleNamespace(CollectionArguments=_FakeCollectionArguments),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "hats_import.collection.run_import",
+        types.SimpleNamespace(run=fail_import),
+    )
+    monkeypatch.setattr(
+        writers, "write_partitions", lambda *args, **kwargs: [str(tmp_path / "part0.parquet")]
+    )
+    monkeypatch.setattr(writers, "_create_hats_client", lambda client: _UnclosableClient())
+
+    with caplog.at_level(logging.ERROR), pytest.raises(RuntimeError, match="import failed"):
+        writers.write_hats_catalog(
+            pd.DataFrame({"ra": [1.0], "dec": [2.0]}),
+            {"save_as": "hats", "hats_artifact_name": "demo"},
+            {"margin_threshold": 5.0},
+            str(tmp_path),
+            "_demo",
+            "ra",
+            "dec",
+            client="shared-client",
+        )
+
+    staging_dirs = list(tmp_path.glob(".demo_staging_*"))
+    assert len(staging_dirs) == 1
+    assert "preserving staging directory" in caplog.text
+    assert "staging directory was preserved for safety" in caplog.text
+    shutil.rmtree(staging_dirs[0])
+
+
+def test_write_hats_catalog_reuses_existing_collection_when_requested(monkeypatch, tmp_path):
     """Detect existing HATS collections without invoking staging or import."""
     monkeypatch.setitem(
         sys.modules,
@@ -130,7 +681,7 @@ def test_write_hats_catalog_reuses_existing_collection(monkeypatch, tmp_path):
 
     result = writers.write_hats_catalog(
         pd.DataFrame({"ra": [1.0], "dec": [2.0]}),
-        {"save_as": "hats", "hats_artifact_name": "demo"},
+        {"save_as": "hats", "hats_artifact_name": "demo", "on_existing": "reuse"},
         {"margin_threshold": 5.0},
         str(tmp_path),
         "_demo",
@@ -140,6 +691,52 @@ def test_write_hats_catalog_reuses_existing_collection(monkeypatch, tmp_path):
     )
 
     assert result == (str(tmp_path / "demo"),)
+
+
+def test_write_hats_catalog_rejects_existing_collection_by_default(monkeypatch, tmp_path):
+    """Avoid silently reusing stale output when no policy is configured."""
+    import pytest
+
+    monkeypatch.setitem(
+        sys.modules,
+        "hats.io.validation",
+        types.SimpleNamespace(is_valid_collection=lambda path: True),
+    )
+
+    with pytest.raises(FileExistsError, match="demo"):
+        writers.write_hats_catalog(
+            pd.DataFrame({"ra": [1.0], "dec": [2.0]}),
+            {"save_as": "hats", "hats_artifact_name": "demo"},
+            {},
+            str(tmp_path),
+            "_demo",
+            "ra",
+            "dec",
+            client="fake_client",
+        )
+
+
+def test_write_hats_catalog_can_reject_existing_collection(monkeypatch, tmp_path):
+    """Fail before staging when the configured HATS destination already exists."""
+    import pytest
+
+    monkeypatch.setitem(
+        sys.modules,
+        "hats.io.validation",
+        types.SimpleNamespace(is_valid_collection=lambda path: True),
+    )
+
+    with pytest.raises(FileExistsError, match="demo"):
+        writers.write_hats_catalog(
+            pd.DataFrame({"ra": [1.0], "dec": [2.0]}),
+            {"save_as": "hats", "hats_artifact_name": "demo", "on_existing": "error"},
+            {"margin_threshold": 5.0},
+            str(tmp_path),
+            "_demo",
+            "ra",
+            "dec",
+            client="fake_client",
+        )
 
 
 def test_suppress_hats_collection_validation_warning(caplog):

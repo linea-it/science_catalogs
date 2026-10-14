@@ -5,7 +5,8 @@ from pathlib import Path
 import dask.dataframe as dd
 import pandas as pd
 import pytest
-from science_catalogs.catalog import _resolve_input_source, prepare_catalog
+
+from science_catalogs.catalog import _preflight_input_source, _resolve_input_source, prepare_catalog
 
 
 def _base_cfg():
@@ -73,6 +74,126 @@ def test_resolve_input_source_requires_catalog_path():
         _resolve_input_source({})
 
 
+def test_prepare_catalog_disables_legacy_photometry_transforms_by_default(monkeypatch, tmp_path):
+    """Require legacy magnitude and dereddening transformations to be explicit opt-ins."""
+    input_path = tmp_path / "input.csv"
+    input_path.write_text("ra,dec\n10.0,-20.0\n", encoding="utf-8")
+    captured = {}
+
+    def fake_decide(input_cfg, compute_mag, compute_dered, dust_cfg):
+        captured["flags"] = (compute_mag, compute_dered)
+        return "_demo", False, False, False
+
+    monkeypatch.setattr("science_catalogs.catalog.decide_suffix_and_flags", fake_decide)
+    monkeypatch.setattr("science_catalogs.catalog.configure_dustmaps_path", lambda dust, client=None: None)
+    monkeypatch.setattr("science_catalogs.catalog.reorder_and_rechunk", lambda ddf, output_cfg, **kwargs: ddf)
+
+    prepared = prepare_catalog(
+        "unused.yml",
+        config={
+            "input": {
+                "catalog_path": str(input_path),
+                "user_selected_cols": ["ra", "dec"],
+                "ra_col": "ra",
+                "dec_col": "dec",
+            },
+            "output": {},
+        },
+    )
+
+    assert captured["flags"] == (False, False)
+    assert prepared.ddf.compute().to_dict("records") == [{"ra": 10.0, "dec": -20.0}]
+
+
+def test_preflight_batches_files_and_reads_parquet_footer_counts(tmp_path):
+    """Build a compact graph and exact partition sizes without reading table data."""
+    for index in range(5):
+        pd.DataFrame({"value": [index, index + 1]}).to_parquet(tmp_path / f"part{index}.parq")
+
+    source = _preflight_input_source(
+        {
+            "input": {
+                "catalog_path": str(tmp_path),
+                "catalog_pattern": "*.parq",
+                "files_per_partition": 2,
+                "parquet_metadata_workers": 2,
+            },
+            "output": {"target_rows_per_part": 3},
+        }
+    )
+
+    assert [len(batch) for batch in source["file_batches"]] == [2, 2, 1]
+    assert source["partition_row_counts"] == [4, 4, 2]
+
+
+def test_preflight_defaults_to_one_file_per_partition(tmp_path):
+    """Favor bounded worker memory when no file grouping is configured."""
+    for index in range(3):
+        (tmp_path / f"part{index}.csv").write_text("value\n1\n", encoding="utf-8")
+
+    source = _preflight_input_source(
+        {
+            "input": {"catalog_path": str(tmp_path), "catalog_pattern": "*.csv"},
+            "output": {},
+        }
+    )
+
+    assert [len(batch) for batch in source["file_batches"]] == [1, 1, 1]
+
+
+def test_preflight_defaults_to_eight_parquet_metadata_workers(tmp_path, monkeypatch):
+    """Bound concurrent footer access when metadata concurrency is omitted."""
+    pd.DataFrame({"value": [1]}).to_parquet(tmp_path / "part.parq")
+    captured = {}
+
+    class _InlineExecutor:
+        def __init__(self, max_workers):
+            captured["max_workers"] = max_workers
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def map(self, function, values):
+            return map(function, values)
+
+    monkeypatch.setattr("science_catalogs.catalog.ThreadPoolExecutor", _InlineExecutor)
+
+    source = _preflight_input_source(
+        {
+            "input": {"catalog_path": str(tmp_path), "catalog_pattern": "*.parq"},
+            "output": {"target_rows_per_part": 1},
+        }
+    )
+
+    assert captured["max_workers"] == 8
+    assert source["partition_row_counts"] == [1]
+
+
+def test_preflight_does_not_use_source_counts_when_filter_removes_rows(tmp_path, monkeypatch):
+    """Fall back to computed processed lengths when filters invalidate footer counts."""
+    pd.DataFrame({"keep": [True, False]}).to_parquet(tmp_path / "part.parq")
+    monkeypatch.setattr(
+        "science_catalogs.catalog._parquet_batch_row_count",
+        lambda paths: (_ for _ in ()).throw(AssertionError("footer count should not be read")),
+    )
+
+    source = _preflight_input_source(
+        {
+            "input": {
+                "catalog_path": str(tmp_path),
+                "catalog_pattern": "*.parq",
+                "filter": {"enabled": True, "column": "keep", "value": True},
+            },
+            "output": {"target_rows_per_part": 1},
+        }
+    )
+
+    assert source["partition_row_counts"] is None
+
+
 def test_prepare_catalog_keeps_file_mode_behavior(monkeypatch, tmp_path):
     """Prepare file-glob inputs through the existing per-file path."""
     first = tmp_path / "part1.csv"
@@ -95,7 +216,7 @@ def test_prepare_catalog_keeps_file_mode_behavior(monkeypatch, tmp_path):
         "science_catalogs.catalog.decide_suffix_and_flags",
         lambda *args, **kwargs: ("_demo", False, False, False),
     )
-    monkeypatch.setattr("science_catalogs.catalog.reorder_and_rechunk", lambda ddf, output_cfg: ddf)
+    monkeypatch.setattr("science_catalogs.catalog.reorder_and_rechunk", lambda ddf, output_cfg, **kwargs: ddf)
     monkeypatch.setattr(
         "science_catalogs.catalog._build_file_processed_meta",
         lambda *args, **kwargs: pd.DataFrame(
@@ -108,21 +229,31 @@ def test_prepare_catalog_keeps_file_mode_behavior(monkeypatch, tmp_path):
         ),
     )
 
-    def fake_process_file_df(
-        path,
+    def fake_process_files_df(
+        paths,
         cfg_path,
         will_mag,
         will_dered_flux,
         will_dered_mag,
         output_columns=None,
+        output_dtypes=None,
     ):
-        seen.append(Path(path).name)
-        df = pd.DataFrame({"ra": [1.0], "dec": [2.0], "mag_g": [22.5], "magerr_g": [0.1]})
+        seen.extend(Path(path).name for path in paths)
+        df = pd.DataFrame(
+            {
+                "ra": [1.0] * len(paths),
+                "dec": [2.0] * len(paths),
+                "mag_g": [22.5] * len(paths),
+                "magerr_g": [0.1] * len(paths),
+            }
+        )
         if output_columns is not None:
             df = df.loc[:, list(output_columns)]
+        if output_dtypes is not None:
+            df = df.astype(output_dtypes)
         return df
 
-    monkeypatch.setattr("science_catalogs.catalog.process_file_df", fake_process_file_df)
+    monkeypatch.setattr("science_catalogs.catalog.process_files_df", fake_process_files_df)
 
     prepared = prepare_catalog("unused.yml", config=cfg)
     result = prepared.ddf.compute()
@@ -156,7 +287,7 @@ def test_prepare_catalog_aligns_file_partition_columns_to_meta(monkeypatch, tmp_
         "science_catalogs.catalog.decide_suffix_and_flags",
         lambda *args, **kwargs: ("_demo", False, False, False),
     )
-    monkeypatch.setattr("science_catalogs.catalog.reorder_and_rechunk", lambda ddf, output_cfg: ddf)
+    monkeypatch.setattr("science_catalogs.catalog.reorder_and_rechunk", lambda ddf, output_cfg, **kwargs: ddf)
     monkeypatch.setattr(
         "science_catalogs.catalog._build_file_processed_meta",
         lambda *args, **kwargs: pd.DataFrame(
@@ -169,33 +300,86 @@ def test_prepare_catalog_aligns_file_partition_columns_to_meta(monkeypatch, tmp_
         ),
     )
 
-    def fake_process_file_df(
-        path,
+    def fake_process_files_df(
+        paths,
         cfg_path,
         will_mag,
         will_dered_flux,
         will_dered_mag,
         output_columns=None,
+        output_dtypes=None,
     ):
         df = pd.DataFrame(
             {
-                "tract": [1],
-                "patch": [2],
-                "ra": [10.0],
-                "dec": [-20.0],
+                "tract": [1] * len(paths),
+                "patch": [2] * len(paths),
+                "ra": [10.0] * len(paths),
+                "dec": [-20.0] * len(paths),
             }
         )
         if output_columns is not None:
             df = df.loc[:, list(output_columns)]
+        if output_dtypes is not None:
+            df = df.astype(output_dtypes)
         return df
 
-    monkeypatch.setattr("science_catalogs.catalog.process_file_df", fake_process_file_df)
+    monkeypatch.setattr("science_catalogs.catalog.process_files_df", fake_process_files_df)
 
     prepared = prepare_catalog("unused.yml", config=cfg)
     result = prepared.ddf.compute()
 
     assert list(result.columns) == ["ra", "dec", "tract", "patch"]
     assert len(result) == 2
+
+
+def test_prepare_catalog_aligns_file_partition_dtypes_to_meta(monkeypatch, tmp_path):
+    """Normalize file-input dtypes before Dask validates partition metadata."""
+    first = tmp_path / "part1.parq"
+    second = tmp_path / "part2.parq"
+    first.write_text("", encoding="utf-8")
+    second.write_text("", encoding="utf-8")
+
+    cfg = {
+        "input": {
+            "catalog_path": str(tmp_path),
+            "catalog_pattern": "*.parq",
+            "ra_col": "ra",
+            "dec_col": "dec",
+        },
+        "photometry": {"enabled": False},
+        "output": {},
+    }
+    meta_input = pd.DataFrame(
+        {
+            "ra": pd.Series(dtype="float64"),
+            "dec": pd.Series(dtype="float64"),
+            "band": pd.Series(dtype="str"),
+        }
+    )
+
+    monkeypatch.setattr("science_catalogs.catalog.configure_dustmaps_path", lambda dust, client=None: None)
+    monkeypatch.setattr("science_catalogs.catalog.reorder_and_rechunk", lambda ddf, output_cfg, **kwargs: ddf)
+    monkeypatch.setattr("science_catalogs.catalog.detect_and_read", lambda *args, **kwargs: meta_input.copy())
+    monkeypatch.setattr(
+        "science_catalogs.processing.detect_and_read",
+        lambda *args, **kwargs: pd.DataFrame(
+            {
+                "ra": [10.0],
+                "dec": [-20.0],
+                "band": pd.Series(["g"], dtype=object),
+            }
+        ),
+    )
+
+    prepared = prepare_catalog("unused.yml", config=cfg)
+    result = prepared.ddf.compute()
+
+    # Dask may promote pandas object strings to string[pyarrow] according to
+    # dataframe.convert-string.  The computed partition must match the Dask
+    # collection metadata after that normalization, not the pre-Dask pandas
+    # metadata.
+    assert result["band"].dtype == prepared.ddf._meta["band"].dtype
+    assert result["band"].tolist() == ["g", "g"]
 
 
 def test_prepare_catalog_reads_hats_input(monkeypatch, tmp_path):
@@ -241,7 +425,7 @@ def test_prepare_catalog_reads_hats_input(monkeypatch, tmp_path):
         lambda *args, **kwargs: ("_demo", False, False, False),
     )
     monkeypatch.setattr("science_catalogs.catalog._is_hats_catalog_path", lambda path: True)
-    monkeypatch.setattr("science_catalogs.catalog.reorder_and_rechunk", lambda ddf, output_cfg: ddf)
+    monkeypatch.setattr("science_catalogs.catalog.reorder_and_rechunk", lambda ddf, output_cfg, **kwargs: ddf)
 
     def fake_open_lsdb_catalog(path, client=None, **kwargs):
         calls["path"] = path
@@ -264,7 +448,7 @@ def test_prepare_catalog_reads_hats_input(monkeypatch, tmp_path):
     assert len(result) == 2
 
 
-def test_prepare_catalog_reads_all_hats_columns_by_default(monkeypatch, tmp_path):
+def test_prepare_catalog_reads_all_hats_columns_by_default(monkeypatch, tmp_path, caplog):
     """Request all HATS columns when no explicit column selection is configured."""
     hats_path = tmp_path / "demo_hats_catalog"
     hats_path.mkdir()
@@ -299,7 +483,7 @@ def test_prepare_catalog_reads_all_hats_columns_by_default(monkeypatch, tmp_path
         lambda *args, **kwargs: ("_demo", False, False, False),
     )
     monkeypatch.setattr("science_catalogs.catalog._is_hats_catalog_path", lambda path: True)
-    monkeypatch.setattr("science_catalogs.catalog.reorder_and_rechunk", lambda ddf, output_cfg: ddf)
+    monkeypatch.setattr("science_catalogs.catalog.reorder_and_rechunk", lambda ddf, output_cfg, **kwargs: ddf)
 
     def fake_open_lsdb_catalog(path, client=None, **kwargs):
         calls["columns"] = kwargs.get("columns")
@@ -307,8 +491,35 @@ def test_prepare_catalog_reads_all_hats_columns_by_default(monkeypatch, tmp_path
 
     monkeypatch.setattr("science_catalogs.catalog.open_lsdb_catalog", fake_open_lsdb_catalog)
 
-    prepared = prepare_catalog("unused.yml", config=cfg)
+    with caplog.at_level("WARNING"):
+        prepared = prepare_catalog("unused.yml", config=cfg)
     result = prepared.ddf.compute()
 
     assert calls["columns"] == "all"
     assert list(result.columns) == ["ra", "dec", "value"]
+    assert "will read every column" in caplog.text
+    assert "very high memory use" in caplog.text
+
+
+def test_prepare_catalog_uses_programmatic_config_on_file_workers(tmp_path):
+    """Use one config for metadata inference and delayed file processing."""
+    input_path = tmp_path / "input.csv"
+    input_path.write_text("id,ra,dec\n1,10.0,-20.0\n", encoding="utf-8")
+    config_path = tmp_path / "different-on-disk.yml"
+    config_path.write_text("unexpected_root_key: true\n", encoding="utf-8")
+    cfg = {
+        "metadata": {"release": "TEST"},
+        "input": {
+            "catalog_path": str(input_path),
+            "user_selected_cols": ["id", "ra", "dec"],
+            "ra_col": "ra",
+            "dec_col": "dec",
+        },
+        "photometry": {"enabled": False},
+        "output": {},
+    }
+
+    prepared = prepare_catalog(str(config_path), config=cfg)
+    result = prepared.ddf.compute()
+
+    assert result.to_dict("records") == [{"id": 1, "ra": 10.0, "dec": -20.0}]

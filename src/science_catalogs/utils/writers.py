@@ -2,13 +2,17 @@
 
 import hashlib
 import logging
+import math
 import os
 import re
 import shutil
 import sys
 import tempfile
+import threading
+import time
 import warnings
 from contextlib import contextmanager
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +24,28 @@ from dask import delayed
 _fname_safe_re = re.compile(r"[^A-Za-z0-9._-]+")
 _HATS_COLLECTION_VALIDATION_MESSAGE = "Looking for catalog - found collection."
 _HATS_PARTITION_INFO_WARNING = "Computing partitions from catalog parquet files. This may be slow."
+_HATS_CLIENT_CLOSE_TIMEOUT_SECONDS = 60
+_DEFAULT_HATS_MAX_IN_FLIGHT_TASKS = 120
+logger = logging.getLogger(__name__)
+_PROGRESS_INTERVAL_SECONDS = 300
+
+
+@contextmanager
+def _periodic_progress(report):
+    """Report from local counters without polling the distributed scheduler."""
+    stopped = threading.Event()
+
+    def monitor():
+        while not stopped.wait(_PROGRESS_INTERVAL_SECONDS):
+            report()
+
+    thread = threading.Thread(target=monitor, name="catalog-progress", daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stopped.set()
+        thread.join()
 
 
 class _SuppressHatsCollectionValidationWarning(logging.Filter):
@@ -74,8 +100,7 @@ def _resolve_materialization_format(output_cfg: dict[str, Any]) -> str:
     return save_as
 
 
-@delayed
-def _write_part(
+def _write_pdf(
     pdf: pd.DataFrame,
     base_dir: str,
     base_suffix: str,
@@ -107,7 +132,28 @@ def _write_part(
     return out_path
 
 
-def write_partitions(ddf_out: dd.DataFrame, output_cfg: dict[str, Any], data_dir: str, suffix: str):
+_write_part = delayed(_write_pdf)
+
+
+@delayed
+def _write_preserved_part(pdf, base_dir, suffix, index, ext, col_for_name, target):
+    # A 25% tolerance avoids splitting files just above the target. Large source
+    # partitions are sliced and written sequentially in the SAME worker task.
+    if target in (None, False) or len(pdf) <= target * 1.25:
+        return (_write_pdf(pdf, base_dir, suffix, index, ext, col_for_name),)
+    chunks = math.ceil(len(pdf) / target)
+    rows = math.ceil(len(pdf) / chunks)
+    return tuple(
+        _write_pdf(
+            pdf.iloc[start : start + rows], base_dir, suffix, f"{index}_chunk{chunk}", ext, col_for_name
+        )
+        for chunk, start in enumerate(range(0, len(pdf), rows))
+    )
+
+
+def write_partitions(
+    ddf_out: dd.DataFrame, output_cfg: dict[str, Any], data_dir: str, suffix: str, *, client=None
+):
     """Write each partition to disk using the configured output format."""
     ext_map = {"parquet": "parquet", "csv": "csv", "hdf5": "h5"}
     ext = ext_map[_resolve_materialization_format(output_cfg)]
@@ -118,11 +164,157 @@ def write_partitions(ddf_out: dd.DataFrame, output_cfg: dict[str, Any], data_dir
         col_for_name = None
 
     delayed_parts = ddf_out.to_delayed()
-    tasks = [
-        _write_part(part, data_dir, suffix, i, ext, col_for_name) for i, part in enumerate(delayed_parts)
-    ]
-    written_paths = dask.compute(*tasks)
+    preserve = output_cfg.get("partitioning_mode", "balanced") == "preserve"
+    if preserve:
+        tasks = [
+            _write_preserved_part(
+                part, data_dir, suffix, i, ext, col_for_name, output_cfg.get("target_rows_per_part")
+            )
+            for i, part in enumerate(delayed_parts)
+        ]
+    else:
+        tasks = [
+            _write_part(part, data_dir, suffix, i, ext, col_for_name) for i, part in enumerate(delayed_parts)
+        ]
+    logger.info("Writing %d %s partition(s)", len(tasks), ext)
+    limit = output_cfg.get("staging_max_in_flight_tasks")
+    if limit is not None and not preserve:
+        raise ValueError("Bounded staging requires preserve partitioning to avoid recomputing shared inputs")
+    completed = 0
+    pending = 0
+    started = time.monotonic()
+
+    def report():
+        elapsed = time.monotonic() - started
+        if limit is None:
+            logger.info(
+                "Staging: awaiting completion of %d input partitions, elapsed %.1f min",
+                len(tasks),
+                elapsed / 60,
+            )
+            return
+        logger.info(
+            "Staging progress: %d/%d input partitions completed, %d in current batch, elapsed %.1f min",
+            completed,
+            len(tasks),
+            pending,
+            elapsed / 60,
+        )
+
+    results = []
+    with _periodic_progress(report):
+        if limit is None:
+            pending = len(tasks)
+            results = dask.compute(*tasks)
+        else:
+            logger.info("Bounded staging: at most %d input partitions per batch", limit)
+            for start in range(0, len(tasks), limit):
+                batch = tasks[start : start + limit]
+                pending = len(batch)
+                if client is None:
+                    results.extend(dask.compute(*batch))
+                else:
+                    futures = client.compute(batch)
+                    try:
+                        # Drain the entire batch even if one task fails, before
+                        # allowing the caller to clean up its staging directory.
+                        batch_results = client.gather(futures, errors="skip")
+                        for future in futures:
+                            if future.status != "finished":
+                                future.result()
+                        results.extend(batch_results)
+                    finally:
+                        for future in futures:
+                            future.release()
+                completed += len(batch)
+                pending = 0
+    written_paths = tuple(path for paths in results for path in paths) if preserve else tuple(results)
+    logger.info("Finished writing %d partition(s)", len(written_paths))
     return written_paths
+
+
+def _create_hats_client(client):
+    """Create a client whose task lifetime is limited to the HATS import."""
+    from distributed import Client
+
+    if client is None:
+        return Client(processes=False)
+
+    scheduler_address = client.scheduler_info().get("address")
+    if not scheduler_address:
+        raise RuntimeError("Could not determine the Dask scheduler address for the HATS import")
+    return Client(scheduler_address, set_as_default=False)
+
+
+class _BoundedSubmitClient:
+    """Proxy a Dask client while bounding the number of unfinished submitted tasks."""
+
+    def __init__(self, client, max_in_flight: int):
+        self.client = client
+        self.max_in_flight = max_in_flight
+        self._condition = threading.Condition()
+        self._unfinished = 0
+        self._stages = {}
+
+    def _release_slot(self, _future=None):
+        with self._condition:
+            self._unfinished -= 1
+            self._condition.notify()
+
+    def _task_done(self, stage, future):
+        with self._condition:
+            self._stages[stage]["completed"] += 1
+            if future.status != "finished":
+                self._stages[stage]["failed"] += 1
+            self._release_slot()
+
+    def report_progress(self):
+        with self._condition:
+            stages = {name: dict(counts) for name, counts in self._stages.items()}
+        for name, counts in stages.items():
+            elapsed = time.monotonic() - counts["started"]
+            logger.info(
+                "HATS %s: submitted=%d completed=%d failed/cancelled=%d pending=%d elapsed=%.1f min",
+                name,
+                counts["submitted"],
+                counts["completed"],
+                counts["failed"],
+                counts["submitted"] - counts["completed"],
+                elapsed / 60,
+            )
+
+    def submit(self, *args, **kwargs):
+        # Reserve a slot before submitting so a fast Future cannot finish before
+        # it is included in the count. Future callbacks run in Dask's callback
+        # executor and only perform this small, thread-safe notification;
+        # unlike distributed.wait(), this creates no asyncio waiter per Future.
+        with self._condition:
+            while self._unfinished >= self.max_in_flight:
+                self._condition.wait()
+            self._unfinished += 1
+            stage = getattr(args[0], "__name__", type(args[0]).__name__)
+            if stage not in self._stages:
+                logger.info("HATS starting task stage: %s", stage)
+                self._stages[stage] = {
+                    "submitted": 0,
+                    "completed": 0,
+                    "failed": 0,
+                    "started": time.monotonic(),
+                }
+            self._stages[stage]["submitted"] += 1
+
+        try:
+            future = self.client.submit(*args, **kwargs)
+            future.add_done_callback(partial(self._task_done, stage))
+        except BaseException:
+            with self._condition:
+                self._stages[stage]["submitted"] -= 1
+            self._release_slot()
+            raise
+        return future
+
+    def __getattr__(self, name):
+        return getattr(self.client, name)
 
 
 def write_hats_catalog(
@@ -136,10 +328,15 @@ def write_hats_catalog(
     client=None,
     *,
     force_recreate: bool = False,
+    execution_cfg: dict[str, Any] | None = None,
 ):
     """Materialize staging files and import them as a HATS collection."""
     if not ra_col or not dec_col:
         raise ValueError("HATS output requires both ra_col and dec_col")
+
+    on_existing = "replace" if force_recreate else output_cfg.get("on_existing", "error")
+    if on_existing not in {"reuse", "error", "replace"}:
+        raise ValueError("output.on_existing must be 'reuse', 'error', or 'replace'")
 
     try:
         from hats.io.validation import is_valid_collection
@@ -148,16 +345,50 @@ def write_hats_catalog(
 
     source_format = output_cfg.get("hats_source_save_as", "parquet") or "parquet"
     artifact_name = output_cfg.get("hats_artifact_name") or f"{suffix}_collection"
+    catalog_cfg = collection_cfg.get("catalog", {})
+    catalog_artifact_name = catalog_cfg.get("artifact_name", "catalog")
+    margin_cfg = collection_cfg.get("margin", {})
     margin_threshold = output_cfg.get("hats_margin_threshold")
     if margin_threshold is None:
-        margin_threshold = collection_cfg.get("margin_threshold", 10.0)
+        margin_threshold = margin_cfg.get("threshold_arcsec", collection_cfg.get("margin_threshold", 5.0))
+    index_cfgs = collection_cfg.get("indexes", []) or []
+    if not isinstance(index_cfgs, list):
+        raise ValueError("collection.indexes must be a list")
+    for index_cfg in index_cfgs:
+        if not isinstance(index_cfg, dict) or not index_cfg.get("column"):
+            raise ValueError("Each collection.indexes entry requires a column")
+        if index_cfg["column"] not in ddf_out.columns:
+            raise ValueError(f"HATS index column not found: {index_cfg['column']}")
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     artifact_path = output_path / artifact_name
+    resume_catalog_path = None
 
-    if not force_recreate and is_valid_collection(artifact_path):
-        return (str(artifact_path),)
+    artifact_is_valid = is_valid_collection(artifact_path)
+    if artifact_is_valid:
+        if on_existing == "reuse":
+            logger.info("Reusing existing HATS collection: %s", artifact_path)
+            return (str(artifact_path),)
+        if on_existing == "error":
+            raise FileExistsError(f"HATS output already exists: {artifact_path}")
+    elif artifact_path.exists():
+        if on_existing == "error":
+            raise FileExistsError(f"HATS output already exists: {artifact_path}")
+        if on_existing == "reuse":
+            from hats.io.validation import is_valid_catalog
+
+            candidate = artifact_path / catalog_artifact_name
+            if not is_valid_catalog(candidate):
+                raise FileExistsError(
+                    "HATS output path exists but contains neither a valid collection nor a "
+                    f"resumable primary catalog: {artifact_path}"
+                )
+            resume_catalog_path = candidate
+            logger.info(
+                "Resuming incomplete HATS collection from existing primary catalog: %s",
+                resume_catalog_path,
+            )
 
     try:
         from hats_import.catalog.file_readers import CsvReader, ParquetPyarrowReader
@@ -166,7 +397,7 @@ def write_hats_catalog(
     except Exception as exc:  # pragma: no cover
         raise RuntimeError("hats-import not available in the environment") from exc
 
-    if force_recreate and artifact_path.exists():
+    if on_existing == "replace" and artifact_path.exists():
         if artifact_path.is_dir():
             shutil.rmtree(artifact_path)
         else:
@@ -175,10 +406,18 @@ def write_hats_catalog(
     # The staging files must live on a filesystem shared by Dask workers.
     staging_dir = Path(tempfile.mkdtemp(prefix=f".{artifact_name}_staging_", dir=str(output_path)))
 
+    cleanup_staging = True
     try:
-        staging_cfg = dict(output_cfg)
-        staging_cfg["save_as"] = source_format
-        written_paths = write_partitions(ddf_out, staging_cfg, str(staging_dir), suffix)
+        written_paths = []
+        if resume_catalog_path is None:
+            staging_cfg = dict(output_cfg)
+            staging_cfg["save_as"] = source_format
+            # Preserve partial staging on failure/interruption in the new
+            # bounded path, even if some worker writes have not stopped yet.
+            if staging_cfg.get("partitioning_mode") == "preserve":
+                cleanup_staging = False
+            written_paths = write_partitions(ddf_out, staging_cfg, str(staging_dir), suffix, client=client)
+            cleanup_staging = True
 
         if source_format == "parquet":
             file_reader = ParquetPyarrowReader()
@@ -187,43 +426,101 @@ def write_hats_catalog(
         else:  # pragma: no cover
             raise ValueError("HATS output supports only parquet or csv as staging formats")
 
-        args = (
-            CollectionArguments(
-                output_artifact_name=artifact_name,
-                output_path=str(output_path),
-                progress_bar=True,
-                tqdm_kwargs={"file": sys.stdout},
-            )
-            .catalog(
-                output_artifact_name="catalog",
-                ra_column=ra_col,
-                dec_column=dec_col,
-                input_file_list=[Path(path) for path in written_paths],
-                file_reader=file_reader,
-            )
-            .add_margin(
-                output_artifact_name=f"margin_{str(margin_threshold).rstrip('0').rstrip('.')}arcs",
-                margin_threshold=margin_threshold,
-                is_default=True,
-            )
+        args = CollectionArguments(
+            output_artifact_name=artifact_name,
+            output_path=str(output_path),
+            progress_bar=True,
+            tqdm_kwargs={"file": sys.stdout},
         )
+        if resume_catalog_path is not None:
+            catalog_kwargs = {
+                "output_artifact_name": catalog_artifact_name,
+                "catalog_path": str(resume_catalog_path),
+            }
+        else:
+            catalog_kwargs = {
+                "output_artifact_name": catalog_artifact_name,
+                "ra_column": ra_col,
+                "dec_column": dec_col,
+                "input_file_list": [Path(path) for path in written_paths],
+                "file_reader": file_reader,
+            }
+            for key in ("pixel_threshold", "highest_healpix_order"):
+                if key in catalog_cfg:
+                    catalog_kwargs[key] = catalog_cfg[key]
+        args = args.catalog(
+            **catalog_kwargs,
+        )
+        margin_kwargs = {"margin_threshold": margin_threshold, "is_default": True}
+        if margin_cfg.get("artifact_name"):
+            margin_kwargs["output_artifact_name"] = margin_cfg["artifact_name"]
+        args.add_margin(**margin_kwargs)
 
-        created_local_client = None
-        hats_client = client
-        if hats_client is None:
-            from dask.distributed import Client
+        for index_cfg in index_cfgs:
+            index_kwargs = {
+                "indexing_column": index_cfg["column"],
+                "drop_duplicates": index_cfg.get("drop_duplicates", True),
+                "include_healpix_29": index_cfg.get("include_healpix_29", True),
+                "include_order_pixel": index_cfg.get("include_order_pixel", True),
+                "include_radec": index_cfg.get("include_radec", False),
+            }
+            if index_cfg.get("artifact_name"):
+                index_kwargs["output_artifact_name"] = index_cfg["artifact_name"]
+            args.add_index(**index_kwargs)
 
-            created_local_client = Client(processes=False)
-            hats_client = created_local_client
+        # hats-import owns many futures internally and does not expose them to callers.
+        # A dedicated client lets us cancel/drain only those futures before removing
+        # staging files, without affecting other work on the shared cluster.
+        hats_client = _create_hats_client(client)
+        execution_cfg = execution_cfg or {}
+        max_in_flight = int(
+            execution_cfg.get("hats_max_in_flight_tasks", _DEFAULT_HATS_MAX_IN_FLIGHT_TASKS)
+            or _DEFAULT_HATS_MAX_IN_FLIGHT_TASKS
+        )
+        bounded_hats_client = _BoundedSubmitClient(hats_client, max_in_flight)
+        cleanup_staging = False
+        import_error = None
 
         try:
-            with _suppress_hats_collection_validation_warning():
-                run(args, hats_client)
+            logger.info(
+                "Importing HATS collection %s with at most %d unfinished task(s)",
+                artifact_name,
+                max_in_flight,
+            )
+            # hats-import uses as_completed() without an explicit loop. Keep its
+            # implicit client lookups on the client that owns these Futures.
+            with (
+                hats_client.as_current(),
+                _suppress_hats_collection_validation_warning(),
+                _periodic_progress(bounded_hats_client.report_progress),
+            ):
+                run(args, bounded_hats_client)
+            bounded_hats_client.report_progress()
+            logger.info("HATS collection created: %s", artifact_path)
+        except BaseException as exc:
+            import_error = exc
+            raise
         finally:
-            if created_local_client is not None:
-                created_local_client.close()
+            try:
+                # Closing the dedicated client releases its pending/running futures.
+                # Do not remove staging until the scheduler acknowledges the close.
+                hats_client.close(timeout=_HATS_CLIENT_CLOSE_TIMEOUT_SECONDS)
+                cleanup_staging = True
+            except Exception:
+                logger.exception(
+                    "Could not safely stop HATS tasks; preserving staging directory: %s",
+                    staging_dir,
+                )
+                if import_error is None:
+                    raise
     finally:
-        shutil.rmtree(staging_dir, ignore_errors=True)
+        if cleanup_staging:
+            logger.info("Removing HATS staging directory: %s", staging_dir)
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            if staging_dir.exists():
+                logger.error("Could not remove HATS staging directory: %s", staging_dir)
+        else:
+            logger.error("HATS staging directory was preserved for safety: %s", staging_dir)
 
     return (str(artifact_path),)
 

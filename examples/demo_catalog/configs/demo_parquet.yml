@@ -1,7 +1,9 @@
+metadata:
+  release: LSST_DP02
+
 input:
-  catalog_folder: ../demo_catalog/data/input
+  catalog_path: examples/demo_catalog/data/input
   catalog_pattern: "*.parquet"
-  which_release: LSST_DP02
   user_selected_cols:
     - object_id
     - ra
@@ -13,17 +15,8 @@ input:
     - is_primary
     - tile
   is_id_in_index: false
-  input_col_type: flux
-  input_col_model: cmodel
-  compute_magnitude: true
-  compute_dereddening: false
-  keep_input_columns_after_filters_or_transformations: false
-  col_pattern: flux_BAND
-  err_pattern: fluxerr_BAND
-  selected_bands: [g, r]
   ra_col: ra
   dec_col: dec
-  band_case: lower_case
   filter:
     enabled: true
     column: is_primary
@@ -35,25 +28,33 @@ input:
     column_type: flux
     flux_value: 80.0
 
+photometry:
+  bands: [g, r]
+  band_case: lower_case
+  keep_input_columns: false
+  magnitude:
+    system: AB
+    flux_unit: nJy
+  measurements:
+    - name: cmodel
+      input:
+        type: flux
+        value_pattern: flux_BAND
+        error_pattern: fluxerr_BAND
+      output:
+        type: mag
+        value_pattern: mag_BAND
+        error_pattern: magerr_BAND
+
 output:
   save_as: parquet
   target_rows_per_part: 2
   order_by: object_id
-  col_final_pattern: mag_BAND
-  err_final_pattern: magerr_BAND
-  band_case: lower_case
-  mag_offset: 31.4
   col_for_filename: tile
 
-cluster:
+execution:
   executor: local
   local:
     n_workers: 3
     threads_per_worker: 2
     memory_limit: "4GB"
-
-dust:
-  path_to_dustmaps: null
-
-collection:
-  margin_threshold: 10.0

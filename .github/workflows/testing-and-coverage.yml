@@ -11,12 +11,15 @@ on:
     branches: [ main ]
 
 jobs:
-  build:
+  test-supported-python:
+    name: Tests (Python ${{ matrix.python-version }})
 
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ['3.12']
+        python-version: ['3.12', '3.13', '3.14']
 
     steps:
     - uses: actions/checkout@v7
@@ -31,10 +34,65 @@ jobs:
         sudo apt-get update
         uv pip install --system -e .[dev]
         if [ -f requirements.txt ]; then uv pip install --system -r requirements.txt; fi
+        python -m pip check
     - name: Run unit tests with pytest
       run: |
-        python -m pytest --cov=science_catalogs --cov-report=xml
+        python -m pytest \
+          --cov=science_catalogs \
+          --cov-report=term-missing \
+          --cov-report=xml \
+          --cov-fail-under=70
     - name: Upload coverage report to codecov
+      if: matrix.python-version == '3.12'
       uses: codecov/codecov-action@v7
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
+
+  test-minimum-dependencies:
+    name: Tests (minimum supported dependencies)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - uses: actions/checkout@v7
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v7
+      with:
+        python-version: '3.12'
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+    - name: Install minimum supported dependencies
+      run: |
+        uv pip install --system -e ".[dev]" --constraint ci/constraints/minimum.txt
+        python -m pip check
+        python -m pip freeze
+    - name: Run unit tests
+      run: python -m pytest -q
+
+  build-distributions:
+    name: Build and install distributions
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        fetch-depth: 0
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v7
+      with:
+        python-version: '3.12'
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+    - name: Install build tools
+      run: uv pip install --system build twine
+    - name: Build wheel and source distribution
+      run: python -m build
+    - name: Validate distribution metadata
+      run: python -m twine check dist/*
+    - name: Install and smoke-test the wheel
+      run: |
+        uv pip install --system dist/*.whl
+        python -m pip check
+        python -c "import science_catalogs; print(science_catalogs.__version__)"
+        science-catalogs --help
