@@ -35,5 +35,5 @@ jobs:
         # Branch protection is a local safeguard. Tests and docs have dedicated
         # workflows; their hooks use pre-push/manual stages and are not selected here.
         SKIP: "no-commit-to-branch"
-    - uses: pre-commit-ci/lite-action@v1.1.0
+    - uses: pre-commit-ci/lite-action@v1.2.0
       if: failure() && github.event_name == 'pull_request' && github.event.pull_request.draft == false
