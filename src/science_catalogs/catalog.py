@@ -432,7 +432,12 @@ def prepare_catalog(
                 will_dered_mag=will_dered_mag,
             ),
         )
-        ddf = processed_catalog.to_dask_dataframe().clear_divisions()
+        processed_ddf = processed_catalog.to_dask_dataframe()
+        # LSDB 0.9.x wraps the Dask expression in a NestedFrame. Calling
+        # clear_divisions() on that dataframe can incorrectly return a Scalar.
+        # Rebuilding from its delayed partitions clears the divisions while
+        # preserving a dataframe collection for downstream writers.
+        ddf = dd.from_delayed(processed_ddf.to_delayed(), meta=processed_ddf._meta)
     ddf_out = reorder_and_rechunk(
         ddf,
         output_cfg,

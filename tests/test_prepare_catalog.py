@@ -6,7 +6,12 @@ import dask.dataframe as dd
 import pandas as pd
 import pytest
 
-from science_catalogs.catalog import _preflight_input_source, _resolve_input_source, prepare_catalog
+from science_catalogs.catalog import (
+    _is_hats_catalog_path,
+    _preflight_input_source,
+    _resolve_input_source,
+    prepare_catalog,
+)
 
 
 def _base_cfg():
@@ -66,6 +71,24 @@ def test_resolve_input_source_detects_hats(monkeypatch, tmp_path):
 
     assert resolved["source"] == "hats"
     assert resolved["catalog_path"] == str(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("valid_catalog", "valid_collection"),
+    [(True, False), (False, True)],
+    ids=["hats-catalog", "hats-collection"],
+)
+def test_hats_input_detection_accepts_catalogs_and_collections(
+    monkeypatch,
+    tmp_path,
+    valid_catalog,
+    valid_collection,
+):
+    """Recognize both supported HATS directory layouts as catalog inputs."""
+    monkeypatch.setattr("hats.io.validation.is_valid_catalog", lambda path: valid_catalog)
+    monkeypatch.setattr("hats.io.validation.is_valid_collection", lambda path: valid_collection)
+
+    assert _is_hats_catalog_path(tmp_path) is True
 
 
 def test_resolve_input_source_requires_catalog_path():
@@ -406,6 +429,26 @@ def test_prepare_catalog_reads_hats_input(monkeypatch, tmp_path):
     calls = {}
     fake_client = object()
 
+    class _LsdbBackedDataFrame:
+        """Expose the LSDB conversion surface that regressed with clear_divisions."""
+
+        def __init__(self, ddf):
+            self._ddf = ddf
+            self._meta = ddf._meta
+
+        def to_delayed(self):
+            return self._ddf.to_delayed()
+
+        def clear_divisions(self):
+            raise AssertionError("clear_divisions must not be called on an LSDB-backed dataframe")
+
+    class _FakeProcessedCatalog:
+        def __init__(self, ddf):
+            self._ddf = ddf
+
+        def to_dask_dataframe(self):
+            return _LsdbBackedDataFrame(self._ddf)
+
     class _FakeCatalog:
         def __init__(self, ddf):
             self._ddf = ddf
@@ -417,7 +460,7 @@ def test_prepare_catalog_reads_hats_input(monkeypatch, tmp_path):
             calls["map_partitions_kwargs"] = dict(kwargs)
             meta = kwargs.pop("meta")
             mapped = self._ddf.map_partitions(func, *args, meta=meta, **kwargs)
-            return _FakeCatalog(mapped)
+            return _FakeProcessedCatalog(mapped)
 
     monkeypatch.setattr("science_catalogs.catalog.configure_dustmaps_path", lambda dust, client=None: None)
     monkeypatch.setattr(
@@ -444,8 +487,40 @@ def test_prepare_catalog_reads_hats_input(monkeypatch, tmp_path):
     assert calls["columns"] == ["object_id", "ra", "dec", "MAG_G_DERED", "MAGERR_G"]
     assert "transform_divisions" not in calls["map_partitions_kwargs"]
     assert "clear_divisions" not in calls["map_partitions_kwargs"]
+    assert isinstance(prepared.ddf.to_delayed(), list)
+    assert prepared.ddf.known_divisions is False
     assert list(result.columns) == ["object_id", "ra", "dec", "mag_g", "magerr_g"]
     assert len(result) == 2
+
+
+def test_prepare_catalog_reads_parquet_input_as_delayed_partitions(tmp_path):
+    """Keep Parquet inputs as an iterable collection of dataframe partitions."""
+    input_path = tmp_path / "input.parquet"
+    pd.DataFrame(
+        {
+            "object_id": [1, 2],
+            "ra": [10.0, 11.0],
+            "dec": [-20.0, -21.0],
+        }
+    ).to_parquet(input_path)
+    cfg = {
+        "input": {
+            "catalog_path": str(input_path),
+            "user_selected_cols": ["object_id", "ra", "dec"],
+            "ra_col": "ra",
+            "dec_col": "dec",
+        },
+        "photometry": {"enabled": False},
+        "output": {},
+    }
+
+    prepared = prepare_catalog("unused.yml", config=cfg)
+
+    assert isinstance(prepared.ddf.to_delayed(), list)
+    assert prepared.ddf.compute().to_dict("records") == [
+        {"object_id": 1, "ra": 10.0, "dec": -20.0},
+        {"object_id": 2, "ra": 11.0, "dec": -21.0},
+    ]
 
 
 def test_prepare_catalog_reads_all_hats_columns_by_default(monkeypatch, tmp_path, caplog):
